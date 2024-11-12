@@ -21,4 +21,13 @@ if [ $build_arg -eq 1 ]; then
 	export PATH="$HOME/neovim/bin:$PATH"
 fi
 
+if [ -f "$HOME/.bash_profile" ]; then
+        cat ./.bash_profile >> "$HOME/.bash_profile" 
+fi
+
+if [ -f "$HOME/.bash_aliases" ]; then
+        cat ./.bash_profile >> "$HOME/.bash_aliases" 
+fi
+
+
 
