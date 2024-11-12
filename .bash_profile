@@ -1,5 +1,9 @@
 # .bash_profile
 
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
+export EDITOR=vim
+
 # Get the aliases and functions
 #if [ -f ~/.bashrc ]; then
 #	source ~/.bashrc

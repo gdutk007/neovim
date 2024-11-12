@@ -28,4 +28,7 @@ if [ -f "$HOME/.bash_aliases" ]; then
         cat ./.bash_profile >> "$HOME/.bash_aliases" 
 fi
 
+if [ ! -f "$HOME/.config/nvim/init.vim" ]; then
+  mkdir -p "$HOME/.config/nvim/" && cp ./init.vim "$HOME/.config/nvim/"
+fi
 
