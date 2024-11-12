@@ -38,3 +38,10 @@ vim.api.nvim_set_keymap(
 --noremap <C-p> :tabp<cr>
 --
 
+-- This creates the path to the home folder. So it
+-- would be ~/.local/share/nvim/lazy/lazy.nvim
+-- From here we can install lazy.nvim package manager
+-- and use that to install plugins like treesitter.
+local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
+-- io.write("hello world!")
+-- io.write(lazypath)
