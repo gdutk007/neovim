@@ -1,13 +1,24 @@
 #!/bin/bash
 
+build_arg=0
 cd ~/neovim/ 
+
+if [ "$1" == "build" ]; then
+	echo "we are trying to build"
+	
+	build_arg=1
+fi
+
 if [ -d "$HOME/neovim/build/" ]; then
 	rm -r build/  # clear the CMake cache
 fi
 
 
-make CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$HOME/neovim" CMAKE_BUILD_TYPE=RelWithDebInfo
-make install
-export PATH="$HOME/neovim/bin:$PATH"
+if [ $build_arg -eq 1 ]; then
+	make clean
+	make -j`nproc` CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$HOME/neovim" CMAKE_BUILD_TYPE=RelWithDebInfo
+	make install
+	export PATH="$HOME/neovim/bin:$PATH"
+fi
 
 

@@ -18,6 +18,9 @@ compile_commands.json
 /.ccls-cache/
 /.clang-tidy
 
+/bin/
+/share/
+
 .DS_Store
 *.mo
 .*.sw?
