@@ -32,3 +32,5 @@ if [ ! -f "$HOME/.config/nvim/init.vim" ]; then
   mkdir -p "$HOME/.config/nvim/" && cp ./init.vim "$HOME/.config/nvim/"
 fi
 
+cp ./.tmux.conf $HOME/
+
