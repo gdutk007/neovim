@@ -1,9 +1,9 @@
 # .bash_profile
 
 # Get the aliases and functions
-if [ -f ~/.bashrc ]; then
-	source ~/.bashrc
-fi
+#if [ -f ~/.bashrc ]; then
+#	source ~/.bashrc
+#fi
 
 # User specific environment and startup programs
 
@@ -25,3 +25,12 @@ export PS1="\u@\h \[\e[32m\]\w \[\e[91m\]\$(parse_git_branch)\[\e[00m\]$ "
 if [ -f ~/.git-completion.bash ]; then
 	. ~/.git-completion.bash
 fi
+
+# now set nvim paths
+if [ -f "$HOME/neovim/bin/nvim" ]; then
+	export PATH="$HOME/neovim/bin:$PATH"
+fi
+
+alias vi='nvim'
+
+alias vim='nvim'

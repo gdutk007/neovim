@@ -18,7 +18,6 @@ if [ $build_arg -eq 1 ]; then
 	make clean
 	make -j`nproc` CMAKE_EXTRA_FLAGS="-DCMAKE_INSTALL_PREFIX=$HOME/neovim" CMAKE_BUILD_TYPE=RelWithDebInfo
 	make install
-	export PATH="$HOME/neovim/bin:$PATH"
 fi
 
 if [ -f "$HOME/.bash_profile" ]; then
@@ -28,6 +27,5 @@ fi
 if [ -f "$HOME/.bash_aliases" ]; then
         cat ./.bash_profile >> "$HOME/.bash_aliases" 
 fi
-
 
 
