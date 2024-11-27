@@ -21,11 +21,23 @@ vim.opt.rtp:prepend(lazypath)
  vim.g.mapleader = "\\"
  vim.g.maplocalleader = "\\"
 
+tree_sitter_spec = {}
+if vim.fn.has('nvim-0.10') == 1 then
+	print("has nvim 0.10.")
+   	tree_sitter_spec = {  "nvim-treesitter/nvim-treesitter", lazy = false }
+--	table = {  "nvim-treesitter/nvim-treesitter", lazy = false }
+else
+	print("does not have")
+   	tree_sitter_spec = {  "nvim-treesitter/nvim-treesitter", lazy = false, enabled = false }
+--	table = {  "nvim-treesitter/nvim-treesitter", lazy = false, enabled = false }
+end
 -- Setup lazy.nvim
 require("lazy").setup({
   spec = {
     -- import your plugins
-    {  "nvim-treesitter/nvim-treesitter", lazy = false },
+--    {  "nvim-treesitter/nvim-treesitter", lazy = false, enabled = false },
+    tree_sitter_spec,
+--    {  "nvim-treesitter/nvim-treesitter", lazy = false, },
     { "folke/tokyonight.nvim", lazy = false },
     { import = "plugins" },
   },
@@ -35,6 +47,6 @@ require("lazy").setup({
   -- automatically check for plugin updates
   checker = { enabled = true },
 })
-
-vim.cmd[[colorscheme tokyonight]]
-
+vim.opt.list = true
+vim.opt.listchars={tab='»·',trail='·',nbsp='·'}
+vim.cmd[[colorscheme tokyonight-night]]
