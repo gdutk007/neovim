@@ -5,10 +5,9 @@ cd ~/neovim/
 
 if [ "$1" == "build" ]; then
 	echo "we are trying to build"
-	
 	build_arg=1
 fi
-
+    
 if [ -d "$HOME/neovim/build/" ]; then
 	rm -r build/  # clear the CMake cache
 fi
@@ -21,16 +20,23 @@ if [ $build_arg -eq 1 ]; then
 fi
 
 if [ -f "$HOME/.bash_profile" ]; then
-        cat ./.bash_profile >> "$HOME/.bash_profile" 
+        cat ./my-neovim-config/.bash_profile >> "$HOME/.bash_profile" 
 fi
 
 if [ -f "$HOME/.bash_aliases" ]; then
-        cat ./.bash_profile >> "$HOME/.bash_aliases" 
+        cat ./my-neovim-config/.bash_profile >> "$HOME/.bash_aliases" 
 fi
 
-if [ ! -f "$HOME/.config/nvim/init.vim" ]; then
-  mkdir -p "$HOME/.config/nvim/" && cp ./init.lua "$HOME/.config/nvim/"
+if [ ! -d  "$HOME/.config/" ]; then
+    mkdir -p "$HOME/.config/"
 fi
 
-cp ./.tmux.conf $HOME/
+if [ ! -d  "$HOME/.config/nvim/" ]; then
+  if [ ! -f "$HOME/.config/nvim/init.vim" ]; then
+      pushd my-neovim-config/ 
+      cp -r nvim/ "$HOME/.config/" 
+      popd
+  fi
+fi
+cp my-neovim-config/.tmux.conf $HOME/
 
