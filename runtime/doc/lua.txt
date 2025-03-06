@@ -17,9 +17,9 @@ get an idea of what lurks beneath: >vim
     :lua vim.print(package.loaded)
 
 Nvim includes a "standard library" |lua-stdlib| for Lua.  It complements the
-"editor stdlib" (|builtin-functions| and |Ex-commands|) and the |API|, all of
-which can be used from Lua code (|lua-vimscript| |vim.api|). Together these
-"namespaces" form the Nvim programming interface.
+"editor stdlib" (|vimscript-functions| + |Ex-commands|) and the |API|, all of
+which can be used from Lua code (|lua-vimscript| |vim.api|). These three
+namespaces form the Nvim programming interface.
 
 Lua plugins and user config are automatically discovered and loaded, just like
 Vimscript. See |lua-guide| for practical guidance.
@@ -46,10 +46,9 @@ before using them: >lua
     -- code for plain lua 5.1
   end
 <
-                                                                  *lua-bit*
 One exception is the LuaJIT `bit` extension, which is always available: when
 built with PUC Lua, Nvim includes a fallback implementation which provides
-`require("bit")`.
+`require("bit")`. See |lua-bit|.
 
                                                                   *lua-profile*
 If Nvim is built with LuaJIT, Lua code can be profiled via >lua
@@ -161,7 +160,7 @@ languages like Python and C#. Example: >lua
     local func_with_opts = function(opts)
         local will_do_foo = opts.foo
         local filename = opts.filename
-        ...
+        -- ...
     end
 
     func_with_opts { foo = true, filename = "hello.world" }
@@ -576,7 +575,7 @@ Example: File-change detection                                    *watch-file*
                                                          *inotify-limitations*
 When on Linux you may need to increase the maximum number of `inotify` watches
 and queued events as the default limit can be too low. To increase the limit,
-run: >sh
+run: >bash
     sysctl fs.inotify.max_user_watches=494462
 <
 This will increase the limit to 494462 watches and queued events. These lines
@@ -618,20 +617,20 @@ Example: TCP echo-server                                          *tcp-server*
 Multithreading                                            *lua-loop-threading*
 
 Plugins can perform work in separate (os-level) threads using the threading
-APIs in luv, for instance `vim.uv.new_thread`. Note that every thread
-gets its own separate Lua interpreter state, with no access to Lua globals
-in the main thread. Neither can the state of the editor (buffers, windows,
-etc) be directly accessed from threads.
+APIs in luv, for instance `vim.uv.new_thread`. Each thread has its own
+separate Lua interpreter state, with no access to Lua globals on the main
+thread. Neither can the editor state (buffers, windows, etc) be directly
+accessed from threads.
 
-A subset of the `vim.*` API is available in threads. This includes:
+A subset of the `vim.*` stdlib is available in threads, including:
 
 - `vim.uv` with a separate event loop per thread.
 - `vim.mpack` and `vim.json` (useful for serializing messages between threads)
 - `require` in threads can use Lua packages from the global |package.path|
 - `print()` and `vim.inspect`
 - `vim.diff`
-- most utility functions in `vim.*` for working with pure Lua values
-  like `vim.split`, `vim.tbl_*`, `vim.list_*`, and so on.
+- Most utility functions in `vim.*` that work with pure Lua values, like
+  `vim.split`, `vim.tbl_*`, `vim.list_*`, etc.
 - `vim.is_thread()` returns true from a non-main thread.
 
 
@@ -685,6 +684,8 @@ vim.hl.range({bufnr}, {ns}, {higroup}, {start}, {finish}, {opts})
                      whether the range is end-inclusive
                    • {priority}? (`integer`, default:
                      `vim.hl.priorities.user`) Highlight priority
+                   • {timeout}? (`integer`, default: -1 no timeout) Time in ms
+                     before highlight is cleared
 
 
 ==============================================================================
@@ -811,11 +812,14 @@ vim.json.decode({str}, {opts})                             *vim.json.decode()*
     Return: ~
         (`any`)
 
-vim.json.encode({obj})                                     *vim.json.encode()*
+vim.json.encode({obj}, {opts})                             *vim.json.encode()*
     Encodes (or "packs") Lua object {obj} as JSON in a Lua string.
 
     Parameters: ~
-      • {obj}  (`any`)
+      • {obj}   (`any`)
+      • {opts}  (`table<string,any>?`) Options table with keys:
+                • escape_slash: (boolean) (default false) Escape slash
+                  characters "/" in string values.
 
     Return: ~
         (`string`)
@@ -1071,17 +1075,21 @@ vim.stricmp({a}, {b})                                          *vim.stricmp()*
 vim.ui_attach({ns}, {options}, {callback})                   *vim.ui_attach()*
     WARNING: This feature is experimental/unstable.
 
-    Attach to |ui-events|, similar to |nvim_ui_attach()| but receive events as
-    Lua callback. Can be used to implement screen elements like popupmenu or
+    Subscribe to |ui-events|, similar to |nvim_ui_attach()| but receive events
+    in a Lua callback. Used to implement screen elements like popupmenu or
     message handling in Lua.
 
-    {options} should be a dictionary-like table, where `ext_...` options
-    should be set to true to receive events for the respective external
-    element.
+    {options} is a dict with one or more `ext_…` |ui-option|s set to true to
+    enable events for the respective UI element.
 
     {callback} receives event name plus additional parameters. See
     |ui-popupmenu| and the sections below for event format for respective
     events.
+
+    Callbacks for `msg_show` events are executed in |api-fast| context;
+    showing the message should be scheduled.
+
+    Excessive errors inside the callback will result in forced detachment.
 
     WARNING: This api is considered experimental. Usability will vary for
     different screen elements. In particular `ext_messages` behavior is
@@ -1093,14 +1101,14 @@ vim.ui_attach({ns}, {options}, {callback})                   *vim.ui_attach()*
         ns = vim.api.nvim_create_namespace('my_fancy_pum')
 
         vim.ui_attach(ns, {ext_popupmenu=true}, function(event, ...)
-          if event == "popupmenu_show" then
+          if event == 'popupmenu_show' then
             local items, selected, row, col, grid = ...
-            print("display pum ", #items)
-          elseif event == "popupmenu_select" then
+            print('display pum ', #items)
+          elseif event == 'popupmenu_select' then
             local selected = ...
-            print("selected", selected)
-          elseif event == "popupmenu_hide" then
-            print("FIN")
+            print('selected', selected)
+          elseif event == 'popupmenu_hide' then
+            print('FIN')
           end
         end)
 <
@@ -1291,7 +1299,7 @@ global value of a |global-local| option, see |:setglobal|.
 
 
 A special interface |vim.opt| exists for conveniently interacting with list-
-and map-style option from Lua: It allows accessing them as Lua tables and
+and map-style options from Lua: It allows accessing them as Lua tables and
 offers object-oriented method for adding and removing entries.
 
     Examples: ~
@@ -1465,10 +1473,8 @@ vim.go                                                                *vim.go*
 <
 
 vim.o                                                                  *vim.o*
-    Get or set |options|. Like `:set`. Invalid key is an error.
-
-    Note: this works on both buffer-scoped and window-scoped options using the
-    current buffer and window.
+    Get or set |options|. Works like `:set`, so buffer/window-scoped options
+    target the current buffer/window. Invalid key is an error.
 
     Example: >lua
         vim.o.cmdheight = 4
@@ -1499,7 +1505,7 @@ vim.wo[{winid}][{bufnr}]                                              *vim.wo*
 Lua module: vim                                                      *lua-vim*
 
 vim.cmd({command})                                                 *vim.cmd()*
-    Executes Vim script commands.
+    Executes Vimscript (|Ex-commands|).
 
     Note that `vim.cmd` can be indexed with a command name to return a
     callable function to the command.
@@ -1533,9 +1539,9 @@ vim.cmd({command})                                                 *vim.cmd()*
 
     Parameters: ~
       • {command}  (`string|table`) Command(s) to execute. If a string,
-                   executes multiple lines of Vim script at once. In this
-                   case, it is an alias to |nvim_exec2()|, where `opts.output`
-                   is set to false. Thus it works identical to |:source|. If a
+                   executes multiple lines of Vimscript at once. In this case,
+                   it is an alias to |nvim_exec2()|, where `opts.output` is
+                   set to false. Thus it works identical to |:source|. If a
                    table, executes a single command. In this case, it is an
                    alias to |nvim_cmd()| where `opts` is empty.
 
@@ -1799,7 +1805,7 @@ vim.system({cmd}, {opts}, {on_exit})                            *vim.system()*
 
         -- Runs synchronously:
         local obj = vim.system({'echo', 'hello'}, { text = true }):wait()
-        -- { code = 0, signal = 0, stdout = 'hello', stderr = '' }
+        -- { code = 0, signal = 0, stdout = 'hello\n', stderr = '' }
 <
 
     See |uv.spawn()| for more details. Note: unlike |uv.spawn()|, vim.system
@@ -1905,6 +1911,11 @@ vim.show_pos({bufnr}, {row}, {col}, {filter})                 *vim.show_pos()*
 
     Can also be shown with `:Inspect`.                              *:Inspect*
 
+    Example: To bind this function to the vim-scriptease inspired `zS` in
+    Normal mode: >lua
+        vim.keymap.set('n', 'zS', vim.show_pos)
+<
+
     Attributes: ~
         Since: 0.9.0
 
@@ -1931,12 +1942,10 @@ vim.show_pos({bufnr}, {row}, {col}, {filter})                 *vim.show_pos()*
 *vim.Ringbuf*
 
     Fields: ~
-      • {clear}  (`fun()`) Clear all items
-      • {push}   (`fun(item: T)`) Adds an item, overriding the oldest item if
-                 the buffer is full.
-      • {pop}    (`fun(): T?`) Removes and returns the first unread item
-      • {peek}   (`fun(): T?`) Returns the first unread item without removing
-                 it
+      • {clear}  (`fun()`) See |Ringbuf:clear()|.
+      • {push}   (`fun(item: T)`) See |Ringbuf:push()|.
+      • {pop}    (`fun(): T?`) See |Ringbuf:pop()|.
+      • {peek}   (`fun(): T?`) See |Ringbuf:peek()|.
 
 
 Ringbuf:clear()                                              *Ringbuf:clear()*
@@ -2419,7 +2428,7 @@ vim.validate({name}, {value}, {validator}, {optional}, {message})
          function vim.startswith(s, prefix)
           vim.validate('s', s, 'string')
           vim.validate('prefix', prefix, 'string')
-          ...
+          -- ...
         end
 <
     2. `vim.validate(spec)` (deprecated) where `spec` is of type
@@ -2433,7 +2442,7 @@ vim.validate({name}, {value}, {validator}, {optional}, {message})
             age={age, 'number'},
             hobbies={hobbies, 'table'},
           }
-          ...
+          -- ...
         end
 <
 
@@ -2465,7 +2474,7 @@ vim.validate({name}, {value}, {validator}, {optional}, {message})
 
     Parameters: ~
       • {name}       (`string`) Argument name
-      • {value}      (`string`) Argument value
+      • {value}      (`any`) Argument value
       • {validator}  (`vim.validate.Validator`)
                      • (`string|string[]`): Any value that can be returned
                        from |lua-type()| in addition to `'callable'`:
@@ -2481,21 +2490,23 @@ vim.validate({name}, {value}, {validator}, {optional}, {message})
 ==============================================================================
 Lua module: vim.loader                                            *vim.loader*
 
-vim.loader.disable()                                    *vim.loader.disable()*
+vim.loader.enable({enable})                              *vim.loader.enable()*
     WARNING: This feature is experimental/unstable.
 
-    Disables the experimental Lua module loader:
-    • removes the loaders
-    • adds the default Nvim loader
+    Enables or disables the experimental Lua module loader:
 
-vim.loader.enable()                                      *vim.loader.enable()*
-    WARNING: This feature is experimental/unstable.
-
-    Enables the experimental Lua module loader:
-    • overrides loadfile
+    Enable (`enable=true`):
+    • overrides |loadfile()|
     • adds the Lua loader using the byte-compilation cache
     • adds the libs loader
     • removes the default Nvim loader
+
+    Disable (`enable=false`):
+    • removes the loaders
+    • adds the default Nvim loader
+
+    Parameters: ~
+      • {enable}  (`boolean?`) true/nil to enable, false to disable
 
 vim.loader.find({modname}, {opts})                         *vim.loader.find()*
     WARNING: This feature is experimental/unstable.
@@ -2625,6 +2636,8 @@ vim.ui.open({path}, {opt})                                     *vim.ui.open()*
     Opens `path` with the system default handler (macOS `open`, Windows
     `explorer.exe`, Linux `xdg-open`, …), or returns (but does not show) an
     error message on failure.
+
+    Can also be invoked with `:Open`.                                  *:Open*
 
     Expands "~/" and environment variables in filesystem paths.
 
@@ -2920,6 +2933,31 @@ vim.keymap.set({mode}, {lhs}, {rhs}, {opts})                *vim.keymap.set()*
 ==============================================================================
 Lua module: vim.fs                                                    *vim.fs*
 
+
+                                                             *vim.fs.exists()*
+Use |uv.fs_stat()| to check a file's type, and whether it exists.
+
+Example: >lua
+  if vim.uv.fs_stat(file) then
+    vim.print("file exists")
+  end
+<
+
+
+vim.fs.abspath({path})                                      *vim.fs.abspath()*
+    Convert path to an absolute path. A tilde (~) character at the beginning
+    of the path is expanded to the user's home directory. Does not check if
+    the path exists, normalize the path, resolve symlinks or hardlinks
+    (including `.` and `..`), or expand environment variables. If the path is
+    already absolute, it is returned unchanged. Also converts `\` path
+    separators to `/`.
+
+    Parameters: ~
+      • {path}  (`string`) Path
+
+    Return: ~
+        (`string`) Absolute path
+
 vim.fs.basename({file})                                    *vim.fs.basename()*
     Return the basename of the given path
 
@@ -2947,6 +2985,7 @@ vim.fs.dir({path}, {opts})                                      *vim.fs.dir()*
                 • skip: (fun(dir_name: string): boolean)|nil Predicate to
                   control traversal. Return false to stop searching the
                   current directory. Only useful when depth > 1
+                • follow: boolean|nil Follow symbolic links. (default: true)
 
     Return: ~
         (`Iterator`) over items in {path}. Each iteration yields two values:
@@ -2988,7 +3027,7 @@ vim.fs.find({names}, {opts})                                   *vim.fs.find()*
 
         -- get all files ending with .cpp or .hpp inside lib/
         local cpp_hpp = vim.fs.find(function(name, path)
-          return name:match('.*%.[ch]pp$') and path:match('[/\\\\]lib$')
+          return name:match('.*%.[ch]pp$') and path:match('[/\\]lib$')
         end, {limit = math.huge, type = 'file'})
 <
 
@@ -3002,8 +3041,10 @@ vim.fs.find({names}, {opts})                                   *vim.fs.find()*
                  If {names} is a function, it is called for each traversed
                  item with args:
                  • name: base name of the current item
-                 • path: full path of the current item The function should
-                   return `true` if the given item is considered a match.
+                 • path: full path of the current item
+
+                 The function should return `true` if the given item is
+                 considered a match.
       • {opts}   (`table`) Optional keyword arguments:
                  • {path}? (`string`) Path to begin searching from. If
                    omitted, the |current-directory| is used.
@@ -3017,14 +3058,21 @@ vim.fs.find({names}, {opts})                                   *vim.fs.find()*
                  • {limit}? (`number`, default: `1`) Stop the search after
                    finding this many matches. Use `math.huge` to place no
                    limit on the number of matches.
+                 • {follow}? (`boolean`, default: `true`) Follow symbolic
+                   links.
 
     Return: ~
         (`string[]`) Normalized paths |vim.fs.normalize()| of all matching
         items
 
 vim.fs.joinpath({...})                                     *vim.fs.joinpath()*
-    Concatenate directories and/or file paths into a single path with
-    normalization (e.g., `"foo/"` and `"bar"` get joined to `"foo/bar"`)
+    Concatenates partial paths (one absolute or relative path followed by zero
+    or more relative paths). Slashes are normalized: redundant slashes are
+    removed, and (on Windows) backslashes are replaced with forward-slashes.
+
+    Examples:
+    • "foo/", "/bar" => "foo/bar"
+    • Windows: "a\foo\", "\bar" => "a/foo/bar"
 
     Attributes: ~
         Since: 0.10.0
@@ -3105,6 +3153,23 @@ vim.fs.parents({start})                                     *vim.fs.parents()*
     Return (multiple): ~
         (`fun(_, dir: string): string?`) Iterator
         (`nil`)
+        (`string?`)
+
+vim.fs.relpath({base}, {target}, {opts})                    *vim.fs.relpath()*
+    Gets `target` path relative to `base`, or `nil` if `base` is not an
+    ancestor.
+
+    Example: >lua
+        vim.fs.relpath('/var', '/var/lib') -- 'lib'
+        vim.fs.relpath('/var', '/usr/bin') -- nil
+<
+
+    Parameters: ~
+      • {base}    (`string`)
+      • {target}  (`string`)
+      • {opts}    (`table?`) Reserved for future use
+
+    Return: ~
         (`string?`)
 
 vim.fs.rm({path}, {opts})                                        *vim.fs.rm()*
@@ -3973,6 +4038,7 @@ vim.version.range({spec})                                *vim.version.range()*
         (`table?`) A table with the following fields:
         • {from} (`vim.Version`)
         • {to}? (`vim.Version`)
+        • {has} (`fun(self: vim.VersionRange, version: string|vim.Version)`)
 
     See also: ~
       • https://github.com/npm/node-semver#ranges
@@ -4558,6 +4624,41 @@ vim.text.hexencode({str})                               *vim.text.hexencode()*
 
     Return: ~
         (`string`) Hex encoded string
+
+vim.text.indent({size}, {text}, {opts})                    *vim.text.indent()*
+    Sets the indent (i.e. the common leading whitespace) of non-empty lines in
+    `text` to `size` spaces/tabs.
+
+    Indent is calculated by number of consecutive indent chars.
+    • The first indented, non-empty line decides the indent char (space/tab):
+      • `SPC SPC TAB …` = two-space indent.
+      • `TAB SPC …` = one-tab indent.
+    • Set `opts.expandtab` to treat tabs as spaces.
+
+    To "dedent" (remove the common indent), pass `size=0`: >lua
+        vim.print(vim.text.indent(0, ' a\n  b\n'))
+<
+
+    To adjust relative-to an existing indent, call indent() twice: >lua
+        local indented, old_indent = vim.text.indent(0, ' a\n b\n')
+        indented = vim.text.indent(old_indent + 2, indented)
+        vim.print(indented)
+<
+
+    To ignore the final, blank line when calculating the indent, use gsub()
+    before calling indent(): >lua
+        local text = '  a\n  b\n '
+        vim.print(vim.text.indent(0, (text:gsub('\n[\t ]+\n?$', '\n'))))
+<
+
+    Parameters: ~
+      • {size}  (`integer`) Number of spaces.
+      • {text}  (`string`) Text to indent.
+      • {opts}  (`{ expandtab?: number }?`)
+
+    Return (multiple): ~
+        (`string`) Indented text.
+        (`integer`) Indent size before modification.
 
 
 ==============================================================================

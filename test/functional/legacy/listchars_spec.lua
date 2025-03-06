@@ -62,12 +62,12 @@ describe("'listchars'", function()
       ..bb>---<<$
       ...cccc><$
       dd........ee<<>-$
-      <$
+      $
       >-------aa>-----$
       ..bb>---..$
       ...cccc>.$
       dd........ee..>-$
-      .$]])
+      $]])
   end)
 
   it('works with :list', function()
@@ -103,7 +103,6 @@ describe("'listchars'", function()
 
   it('"exceeds" character does not appear in foldcolumn vim-patch:8.2.3121', function()
     local screen = Screen.new(60, 10)
-    screen:attach()
     exec([[
       call setline(1, ['aaa', '', 'a', 'aaaaaa'])
       vsplit

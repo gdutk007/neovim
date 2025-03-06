@@ -16,8 +16,7 @@ describe('ext_multigrid', function()
 
   before_each(function()
     clear{args_rm={'--headless'}, args={'--cmd', 'set laststatus=2'}}
-    screen = Screen.new(53,14)
-    screen:attach({ext_multigrid=true})
+    screen = Screen.new(53,14, {ext_multigrid=true})
     screen:set_default_attr_ids({
       [1] = {bold = true, foreground = Screen.colors.Blue1},
       [2] = {foreground = Screen.colors.Magenta},
@@ -1095,7 +1094,7 @@ describe('ext_multigrid', function()
   end)
 
   it('supports mouse', function()
-    command('autocmd! nvim_popupmenu') -- Delete the default MenuPopup event handler.
+    command('autocmd! nvim.popupmenu') -- Delete the default MenuPopup event handler.
     insert('some text\nto be clicked')
     screen:expect{grid=[[
     ## grid 1
@@ -2408,6 +2407,22 @@ describe('ext_multigrid', function()
 
   it('with winbar', function()
     command('split')
+    local win_pos ={
+      [2] = {
+        height = 5,
+        startcol = 0,
+        startrow = 7,
+        width = 53,
+        win = 1000
+      },
+      [4] = {
+        height = 6,
+        startcol = 0,
+        startrow = 0,
+        width = 53,
+        win = 1001
+      }
+    }
     screen:expect{grid=[[
     ## grid 1
       [4:-----------------------------------------------------]|*6
@@ -2429,15 +2444,7 @@ describe('ext_multigrid', function()
     }, win_viewport_margins={
       [2] = {win = 1000, top = 0, bottom = 0, left = 0, right = 0};
       [4] = {win = 1001, top = 0, bottom = 0, left = 0, right = 0};
-    }}
-
-    -- XXX: hack to get notifications. Could use next_msg() also.
-    local orig_handle_win_pos = screen._handle_win_pos
-    local win_pos = {}
-    function screen._handle_win_pos(self, grid, win, startrow, startcol, width, height)
-      table.insert(win_pos, {grid, win, startrow, startcol, width, height})
-      orig_handle_win_pos(self, grid, win, startrow, startcol, width, height)
-    end
+    }, win_pos = win_pos }
 
     command('setlocal winbar=very%=bar')
     screen:expect{grid=[[
@@ -2462,8 +2469,7 @@ describe('ext_multigrid', function()
     }, win_viewport_margins={
       [2] = {win = 1000, top = 0, bottom = 0, left = 0, right = 0};
       [4] = {win = 1001, top = 1, bottom = 0, left = 0, right = 0};
-    }}
-    eq({}, win_pos)
+    }, win_pos = win_pos }
 
     command('setlocal winbar=')
     screen:expect{grid=[[
@@ -2487,8 +2493,7 @@ describe('ext_multigrid', function()
     }, win_viewport_margins={
       [2] = {win = 1000, top = 0, bottom = 0, left = 0, right = 0};
       [4] = {win = 1001, top = 0, bottom = 0, left = 0, right = 0};
-    }}
-    eq({}, win_pos)
+    }, win_pos = win_pos }
   end)
 
   it('with winbar dragging statusline with mouse works correctly', function()

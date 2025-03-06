@@ -26,6 +26,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <iconv.h>
+#include <limits.h>
 #include <locale.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -51,7 +52,6 @@
 #include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/grid.h"
-#include "nvim/grid_defs.h"
 #include "nvim/iconv_defs.h"
 #include "nvim/keycodes.h"
 #include "nvim/macros_defs.h"
@@ -1119,7 +1119,7 @@ int utf_char2bytes(const int c, char *const buf)
 /// stateful algorithm to determine grapheme clusters. Still available
 /// to support some legacy code which hasn't been refactored yet.
 ///
-/// To check if a char would combine with a preceeding space, use
+/// To check if a char would combine with a preceding space, use
 /// utf_iscomposing_first() instead.
 ///
 /// Based on code from Markus Kuhn.
@@ -1400,11 +1400,11 @@ int utf_fold(int a)
 int mb_toupper(int a)
 {
   // If 'casemap' contains "keepascii" use ASCII style toupper().
-  if (a < 128 && (cmp_flags & CMP_KEEPASCII)) {
+  if (a < 128 && (cmp_flags & kOptCmpFlagKeepascii)) {
     return TOUPPER_ASC(a);
   }
 
-  if (!(cmp_flags & CMP_INTERNAL)) {
+  if (!(cmp_flags & kOptCmpFlagInternal)) {
     return (int)towupper((wint_t)a);
   }
 
@@ -1426,11 +1426,11 @@ bool mb_islower(int a)
 int mb_tolower(int a)
 {
   // If 'casemap' contains "keepascii" use ASCII style tolower().
-  if (a < 128 && (cmp_flags & CMP_KEEPASCII)) {
+  if (a < 128 && (cmp_flags & kOptCmpFlagKeepascii)) {
     return TOLOWER_ASC(a);
   }
 
-  if (!(cmp_flags & CMP_INTERNAL)) {
+  if (!(cmp_flags & kOptCmpFlagInternal)) {
     return (int)towlower((wint_t)a);
   }
 
@@ -2246,24 +2246,6 @@ int mb_charlen(const char *str)
 
   for (count = 0; *p != NUL; count++) {
     p += utfc_ptr2len(p);
-  }
-
-  return count;
-}
-
-int mb_charlen2bytelen(const char *str, int charlen)
-{
-  const char *p = str;
-  int count = 0;
-
-  if (p == NULL) {
-    return 0;
-  }
-
-  for (int i = 0; *p != NUL && i < charlen; i++) {
-    int b = utfc_ptr2len(p);
-    p += b;
-    count += b;
   }
 
   return count;

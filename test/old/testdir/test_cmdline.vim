@@ -271,6 +271,12 @@ func Test_changing_cmdheight()
 
   let lines =<< trim END
       set cmdheight=1 laststatus=2
+      func EchoOne()
+        set laststatus=2 cmdheight=1
+        echo 'foo'
+        echo 'bar'
+        set cmdheight=2
+      endfunc
       func EchoTwo()
         set laststatus=2
         set cmdheight=5
@@ -285,8 +291,8 @@ func Test_changing_cmdheight()
   call term_sendkeys(buf, ":resize -3\<CR>")
   call VerifyScreenDump(buf, 'Test_changing_cmdheight_1', {})
 
-  " using the space available doesn't change the status line
-  call term_sendkeys(buf, ":set cmdheight+=3\<CR>")
+  " :resize now also changes 'cmdheight' accordingly
+  call term_sendkeys(buf, ":set cmdheight+=1\<CR>")
   call VerifyScreenDump(buf, 'Test_changing_cmdheight_2', {})
 
   " using more space moves the status line up
@@ -294,10 +300,10 @@ func Test_changing_cmdheight()
   call VerifyScreenDump(buf, 'Test_changing_cmdheight_3', {})
 
   " reducing cmdheight moves status line down
-  call term_sendkeys(buf, ":set cmdheight-=2\<CR>")
+  call term_sendkeys(buf, ":set cmdheight-=3\<CR>")
   call VerifyScreenDump(buf, 'Test_changing_cmdheight_4', {})
 
-  " reducing window size and then setting cmdheight 
+  " reducing window size and then setting cmdheight
   call term_sendkeys(buf, ":resize -1\<CR>")
   call term_sendkeys(buf, ":set cmdheight=1\<CR>")
   call VerifyScreenDump(buf, 'Test_changing_cmdheight_5', {})
@@ -305,6 +311,14 @@ func Test_changing_cmdheight()
   " setting 'cmdheight' works after outputting two messages
   call term_sendkeys(buf, ":call EchoTwo()\<CR>")
   call VerifyScreenDump(buf, 'Test_changing_cmdheight_6', {})
+
+  " increasing 'cmdheight' doesn't clear the messages that need hit-enter
+  call term_sendkeys(buf, ":call EchoOne()\<CR>")
+  call VerifyScreenDump(buf, 'Test_changing_cmdheight_7', {})
+
+  " window commands do not reduce 'cmdheight' to value lower than :set by user
+  call term_sendkeys(buf, "\<CR>:wincmd _\<CR>")
+  call VerifyScreenDump(buf, 'Test_changing_cmdheight_8', {})
 
   " clean up
   call StopVimInTerminal(buf)
@@ -2154,22 +2168,58 @@ func Wildmode_tests()
   call assert_equal('AAA    AAAA   AAAAA', g:Sline)
   call assert_equal('"b A', @:)
 
+  " When 'wildmenu' is not set, 'noselect' completes first item
+  set wildmode=noselect
+  call feedkeys(":MyCmd o\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd oneA', @:)
+
+  " When 'noselect' is present, do not complete first <tab>.
+  set wildmenu
+  set wildmode=noselect
+  call feedkeys(":MyCmd o\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd o', @:)
+  call feedkeys(":MyCmd o\t\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd o', @:)
+  call feedkeys(":MyCmd o\t\t\<C-Y>\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd o', @:)
+
+  " When 'full' is present, complete after first <tab>.
+  set wildmode=noselect,full
+  call feedkeys(":MyCmd o\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd o', @:)
+  call feedkeys(":MyCmd o\t\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd oneA', @:)
+  call feedkeys(":MyCmd o\t\t\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd oneB', @:)
+  call feedkeys(":MyCmd o\t\t\t\<C-Y>\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd oneB', @:)
+
+  " 'noselect' has no effect when 'longest' is present.
+  set wildmode=noselect:longest
+  call feedkeys(":MyCmd o\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd one', @:)
+
+  " Complete 'noselect' value in 'wildmode' option
+  set wildmode&
+  call feedkeys(":set wildmode=n\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"set wildmode=noselect', @:)
+  call feedkeys(":set wildmode=\t\t\t\t\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"set wildmode=noselect', @:)
+
   " when using longest completion match, matches shorter than the argument
   " should be ignored (happens with :help)
   set wildmode=longest,full
-  set wildmenu
   call feedkeys(":help a*\t\<C-B>\"\<CR>", 'xt')
   call assert_equal('"help a', @:)
   " non existing file
   call feedkeys(":e a1b2y3z4\t\<C-B>\"\<CR>", 'xt')
   call assert_equal('"e a1b2y3z4', @:)
-  set wildmenu&
 
   " Test for longest file name completion with 'fileignorecase'
   " On MS-Windows, file names are case insensitive.
   if has('unix')
-    call writefile([], 'XTESTfoo')
-    call writefile([], 'Xtestbar')
+    call writefile([], 'XTESTfoo', 'D')
+    call writefile([], 'Xtestbar', 'D')
     set nofileignorecase
     call feedkeys(":e XT\<Tab>\<C-B>\"\<CR>", 'xt')
     call assert_equal('"e XTESTfoo', @:)
@@ -2181,9 +2231,22 @@ func Wildmode_tests()
     call feedkeys(":e Xt\<Tab>\<C-B>\"\<CR>", 'xt')
     call assert_equal('"e Xtest', @:)
     set fileignorecase&
-    call delete('XTESTfoo')
-    call delete('Xtestbar')
   endif
+
+  " If 'noselect' is present, single item menu should not insert item
+  func! T(a, c, p)
+    return "oneA"
+  endfunc
+  command! -nargs=1 -complete=custom,T MyCmd
+  set wildmode=noselect,full
+  call feedkeys(":MyCmd o\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd o', @:)
+  call feedkeys(":MyCmd o\t\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd oneA', @:)
+  " 'nowildmenu' should make 'noselect' ineffective
+  set nowildmenu
+  call feedkeys(":MyCmd o\t\<C-B>\"\<CR>", 'xt')
+  call assert_equal('"MyCmd oneA', @:)
 
   %argdelete
   delcommand MyCmd
@@ -2959,6 +3022,28 @@ func Test_wildmenu_pum_rightleft()
   call term_sendkeys(buf, ":sign \<Tab>")
   call VerifyScreenDump(buf, 'Test_wildmenu_pum_rl', {})
 
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test highlighting when pattern matches non-first character of item
+func Test_wildmenu_pum_hl_nonfirst()
+  CheckScreendump
+  let lines =<< trim END
+    set wildoptions=pum wildchar=<tab> wildmode=noselect,full
+    hi PmenuMatchSel  ctermfg=6 ctermbg=7
+    hi PmenuMatch     ctermfg=4 ctermbg=225
+    func T(a, c, p)
+      return ["oneA", "o neBneB", "aoneC"]
+    endfunc
+    command -nargs=1 -complete=customlist,T MyCmd
+  END
+
+  call writefile(lines, 'Xwildmenu_pum_hl_nonf', 'D')
+  let buf = RunVimInTerminal('-S Xwildmenu_pum_hl_nonf', #{rows: 10, cols: 50})
+
+  call term_sendkeys(buf, ":MyCmd ne\<tab>")
+  call VerifyScreenDump(buf, 'Test_wildmenu_pum_hl_match_nonf', {})
+  call term_sendkeys(buf, "\<Esc>")
   call StopVimInTerminal(buf)
 endfunc
 
@@ -4021,6 +4106,27 @@ func Test_rulerformat_position()
   call term_sendkeys(buf, ":set laststatus=0 winwidth=1\<CR>")
   call term_sendkeys(buf, "\<C-W>v\<C-W>|\<C-W>p")
   call VerifyScreenDump(buf, 'Test_rulerformat_position', {})
+
+  " clean up
+  call StopVimInTerminal(buf)
+endfunc
+
+" Test for using "%!" in 'rulerformat' to use a function
+func Test_rulerformat_function()
+  CheckScreendump
+
+  let lines =<< trim END
+    func TestRulerFn()
+      return '10,20%=30%%'
+    endfunc
+  END
+  call writefile(lines, 'Xrulerformat_function', 'D')
+
+  let buf = RunVimInTerminal('-S Xrulerformat_function', #{rows: 2, cols: 40})
+  call term_sendkeys(buf, ":set ruler rulerformat=%!TestRulerFn()\<CR>")
+  call term_sendkeys(buf, ":redraw!\<CR>")
+  call term_wait(buf)
+  call VerifyScreenDump(buf, 'Test_rulerformat_function', {})
 
   " clean up
   call StopVimInTerminal(buf)

@@ -28,8 +28,7 @@ describe('folded lines', function()
   local function with_ext_multigrid(multigrid)
     local screen
     before_each(function()
-      screen = Screen.new(45, 8)
-      screen:attach({ rgb = true, ext_multigrid = multigrid })
+      screen = Screen.new(45, 8, { rgb = true, ext_multigrid = multigrid })
       screen:set_default_attr_ids({
         [1] = { bold = true, foreground = Screen.colors.Blue1 },
         [2] = { reverse = true },
@@ -2744,5 +2743,24 @@ describe('folded lines', function()
 
   describe('without ext_multigrid', function()
     with_ext_multigrid(false)
+  end)
+
+  it("do not interfere with corrected cursor position for 'scrolloff'", function()
+    local screen = Screen.new(40, 7)
+    exec([[
+      call setline(1, range(10))
+      6,7fold
+      set scrolloff=1
+      norm L
+    ]])
+    screen:expect([[
+      0                                       |
+      1                                       |
+      2                                       |
+      3                                       |
+      ^4                                       |
+      {13:+--  2 lines: 5·························}|
+                                              |
+    ]])
   end)
 end)

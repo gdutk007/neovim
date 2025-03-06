@@ -14,6 +14,7 @@
 #include "auto/config.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
+#include "nvim/api/ui.h"
 #include "nvim/arglist.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
@@ -21,6 +22,7 @@
 #include "nvim/buffer.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/change.h"
+#include "nvim/channel.h"
 #include "nvim/charset.h"
 #include "nvim/cmdexpand.h"
 #include "nvim/cmdexpand_defs.h"
@@ -51,7 +53,6 @@
 #include "nvim/getchar.h"
 #include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
-#include "nvim/highlight.h"
 #include "nvim/highlight_defs.h"
 #include "nvim/highlight_group.h"
 #include "nvim/input.h"
@@ -68,6 +69,7 @@
 #include "nvim/message.h"
 #include "nvim/mouse.h"
 #include "nvim/move.h"
+#include "nvim/msgpack_rpc/server.h"
 #include "nvim/normal.h"
 #include "nvim/normal_defs.h"
 #include "nvim/ops.h"
@@ -980,12 +982,10 @@ void handle_did_throw(void)
     force_abort = true;
   }
 
-  msg_ext_set_kind("emsg");  // kind=emsg for :throw, exceptions. #9993
-
   if (messages != NULL) {
     do {
       msglist_T *next = messages->next;
-      emsg_multiline(messages->msg, messages->multiline);
+      emsg_multiline(messages->msg, "emsg", HLF_E, messages->multiline);
       xfree(messages->msg);
       xfree(messages->sfile);
       xfree(messages);
@@ -2204,7 +2204,7 @@ static char *do_one_cmd(char **cmdlinep, int flags, cstack_T *cstack, LineGetter
           errormsg = _("E493: Backwards range given");
           goto doend;
         }
-        if (ask_yesno(_("Backwards range given, OK to swap"), false) != 'y') {
+        if (ask_yesno(_("Backwards range given, OK to swap")) != 'y') {
           goto doend;
         }
       }
@@ -4504,6 +4504,12 @@ static void ex_bunload(exarg_T *eap)
 /// :[N]sbuffer [N]      to buffer N
 static void ex_buffer(exarg_T *eap)
 {
+  do_exbuffer(eap);
+}
+
+/// ":buffer" command and alike.
+static void do_exbuffer(exarg_T *eap)
+{
   if (*eap->arg) {
     eap->errmsg = ex_errmsg(e_trailing_arg, eap->arg);
   } else {
@@ -5501,12 +5507,14 @@ static void ex_tabs(exarg_T *eap)
 
     msg_putchar('\n');
     vim_snprintf(IObuff, IOSIZE, _("Tab page %d"), tabcount++);
-    msg_outtrans(IObuff, HL_ATTR(HLF_T));
+    msg_outtrans(IObuff, HLF_T, false);
     os_breakcheck();
 
     FOR_ALL_WINDOWS_IN_TAB(wp, tp) {
       if (got_int) {
         break;
+      } else if (!wp->w_config.focusable) {
+        continue;
       }
 
       msg_putchar('\n');
@@ -5519,9 +5527,59 @@ static void ex_tabs(exarg_T *eap)
       } else {
         home_replace(wp->w_buffer, wp->w_buffer->b_fname, IObuff, IOSIZE, true);
       }
-      msg_outtrans(IObuff, 0);
+      msg_outtrans(IObuff, 0, false);
       os_breakcheck();
     }
+  }
+}
+
+/// ":detach"
+///
+/// Detaches the current UI.
+///
+/// ":detach!" with bang (!) detaches all UIs _except_ the current UI.
+static void ex_detach(exarg_T *eap)
+{
+  // come on pooky let's burn this mf down
+  if (eap && eap->forceit) {
+    emsg("bang (!) not supported yet");
+  } else {
+    // 1. (TODO) Send "detach" UI-event (notification only).
+    // 2. Perform server-side `nvim_ui_detach`.
+    // 3. Close server-side channel without self-exit.
+
+    if (!current_ui) {
+      emsg("UI not attached");
+      return;
+    }
+
+    Channel *chan = find_channel(current_ui);
+    if (!chan) {
+      emsg(e_invchan);
+      return;
+    }
+    chan->detach = true;  // Prevent self-exit on channel-close.
+
+    // Server-side UI detach. Doesn't close the channel.
+    Error err2 = ERROR_INIT;
+    nvim_ui_detach(chan->id, &err2);
+    if (ERROR_SET(&err2)) {
+      emsg(err2.msg);  // UI disappeared already?
+      api_clear_error(&err2);
+      return;
+    }
+
+    // Server-side channel close.
+    const char *err = NULL;
+    bool rv = channel_close(chan->id, kChannelPartAll, &err);
+    if (!rv && err) {
+      emsg(err);  // UI disappeared already?
+      return;
+    }
+    // XXX: Can't do this, channel_decref() is async...
+    // assert(!find_channel(chan->id));
+
+    ILOG("detach current_ui=%" PRId64, chan->id);
   }
 }
 
@@ -6101,12 +6159,20 @@ static void ex_sleep(exarg_T *eap)
   default:
     semsg(_(e_invarg2), eap->arg); return;
   }
-  do_sleep(len);
+
+  // Hide the cursor if invoked with !
+  do_sleep(len, eap->forceit);
 }
 
 /// Sleep for "msec" milliseconds, but return early on CTRL-C.
-void do_sleep(int64_t msec)
+///
+/// @param hide_cursor  hide the cursor if true
+void do_sleep(int64_t msec, bool hide_cursor)
 {
+  if (hide_cursor) {
+    ui_busy_start();
+  }
+
   ui_flush();  // flush before waiting
   LOOP_PROCESS_EVENTS_UNTIL(&main_loop, main_loop.events, msec, got_int);
 
@@ -6114,6 +6180,10 @@ void do_sleep(int64_t msec)
   // input buffer, otherwise a following call to input() fails.
   if (got_int) {
     vpeekc();
+  }
+
+  if (hide_cursor) {
+    ui_busy_stop();
   }
 }
 
@@ -6990,14 +7060,35 @@ static void ex_ptag(exarg_T *eap)
 static void ex_pedit(exarg_T *eap)
 {
   win_T *curwin_save = curwin;
-
-  // Open the preview window or popup and make it the current window.
-  g_do_tagpreview = (int)p_pvh;
-  prepare_tagpreview(true);
+  prepare_preview_window();
 
   // Edit the file.
   do_exedit(eap, NULL);
 
+  back_to_current_window(curwin_save);
+}
+
+/// ":pbuffer"
+static void ex_pbuffer(exarg_T *eap)
+{
+  win_T *curwin_save = curwin;
+  prepare_preview_window();
+
+  // Go to the buffer.
+  do_exbuffer(eap);
+
+  back_to_current_window(curwin_save);
+}
+
+static void prepare_preview_window(void)
+{
+  // Open the preview window or popup and make it the current window.
+  g_do_tagpreview = (int)p_pvh;
+  prepare_tagpreview(true);
+}
+
+static void back_to_current_window(win_T *curwin_save)
+{
   if (curwin != curwin_save && win_valid(curwin_save)) {
     // Return cursor to where we were
     validate_cursor(curwin);
@@ -7362,8 +7453,7 @@ char *eval_vars(char *src, const char *srcstart, size_t *usedlen, linenr_T *lnum
         *errormsg = _(e_usingsid);
         return NULL;
       }
-      snprintf(strbuf, sizeof(strbuf), "<SNR>%" PRIdSCID "_",
-               current_sctx.sc_sid);
+      snprintf(strbuf, sizeof(strbuf), "<SNR>%" PRIdSCID "_", current_sctx.sc_sid);
       result = strbuf;
       break;
 
@@ -7736,7 +7826,7 @@ static void ex_terminal(exarg_T *eap)
   if (*eap->arg != NUL) {  // Run {cmd} in 'shell'.
     char *name = vim_strsave_escaped(eap->arg, "\"\\");
     snprintf(ex_cmd + len, sizeof(ex_cmd) - len,
-             " | call termopen(\"%s\")", name);
+             " | call jobstart(\"%s\",{'term':v:true})", name);
     xfree(name);
   } else {  // No {cmd}: run the job with tokenized 'shell'.
     if (*p_sh == NUL) {
@@ -7759,7 +7849,7 @@ static void ex_terminal(exarg_T *eap)
     shell_free_argv(argv);
 
     snprintf(ex_cmd + len, sizeof(ex_cmd) - len,
-             " | call termopen([%s])", shell_argv + 1);
+             " | call jobstart([%s], {'term':v:true})", shell_argv + 1);
   }
 
   do_cmdline_cmd(ex_cmd);
@@ -7776,7 +7866,7 @@ void verify_command(char *cmd)
   if (strcmp("smile", cmd) != 0) {
     return;  // acceptable non-existing command
   }
-  int a = HL_ATTR(HLF_E);
+  int a = HLF_E;
   msg(" #xxn`          #xnxx`        ,+x@##@Mz;`        .xxx"
       "xxxxxxnz+,      znnnnnnnnnnnnnnnn.", a);
   msg(" n###z          x####`      :x##########W+`      ,###"

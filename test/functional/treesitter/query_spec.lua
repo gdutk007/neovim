@@ -86,7 +86,7 @@ void ui_refresh(void)
         local before = vim.api.nvim__stats().ts_query_parse_count
         collectgarbage('stop')
         for _ = 1, _n, 1 do
-          vim.treesitter.query.parse('c', long_query, _n)
+          vim.treesitter.query.parse('c', long_query)
         end
         collectgarbage('restart')
         collectgarbage('collect')
@@ -96,8 +96,39 @@ void ui_refresh(void)
     end
 
     eq(1, q(1))
-    -- cache is cleared by garbage collection even if valid "cquery" reference is kept around
-    eq(1, q(100))
+    -- cache is retained even after garbage collection
+    eq(0, q(100))
+  end)
+
+  it('cache is cleared upon runtimepath changes, or setting query manually', function()
+    ---@return number
+    exec_lua(function()
+      _G.query_parse_count = _G.query_parse_count or 0
+      local parse = vim.treesitter.query.parse
+      vim.treesitter.query.parse = function(...)
+        _G.query_parse_count = _G.query_parse_count + 1
+        return parse(...)
+      end
+    end)
+
+    local function q(_n)
+      return exec_lua(function()
+        for _ = 1, _n, 1 do
+          vim.treesitter.query.get('c', 'highlights')
+        end
+        return _G.query_parse_count
+      end)
+    end
+
+    eq(1, q(10))
+    exec_lua(function()
+      vim.opt.rtp:prepend('/another/dir')
+    end)
+    eq(2, q(100))
+    exec_lua(function()
+      vim.treesitter.query.set('c', 'highlights', [[; test]])
+    end)
+    eq(3, q(100))
   end)
 
   it('supports query and iter by capture (iter_captures)', function()
@@ -355,8 +386,8 @@ void ui_refresh(void)
       [[((primitive_type) @c-keyword (#any-of? @c-keyword "int" "float"))]]
     )
     eq({
-      { 'c-keyword', 'primitive_type', { 2, 2, 2, 5 }, 'int' },
-      { 'c-keyword', 'primitive_type', { 3, 4, 3, 7 }, 'int' },
+      { 'c-keyword', 'primitive_type', { 2, 0, 2, 3 }, 'int' },
+      { 'c-keyword', 'primitive_type', { 3, 2, 3, 5 }, 'int' },
     }, res0)
 
     local res1 = exec_lua(
@@ -370,9 +401,9 @@ void ui_refresh(void)
       ]]
     )
     eq({
-      { 'fizzbuzz-strings', 'string_literal', { 6, 15, 6, 38 }, '"number= %d FizzBuzz\\n"' },
-      { 'fizzbuzz-strings', 'string_literal', { 8, 15, 8, 34 }, '"number= %d Fizz\\n"' },
-      { 'fizzbuzz-strings', 'string_literal', { 10, 15, 10, 34 }, '"number= %d Buzz\\n"' },
+      { 'fizzbuzz-strings', 'string_literal', { 6, 13, 6, 36 }, '"number= %d FizzBuzz\\n"' },
+      { 'fizzbuzz-strings', 'string_literal', { 8, 13, 8, 32 }, '"number= %d Fizz\\n"' },
+      { 'fizzbuzz-strings', 'string_literal', { 10, 13, 10, 32 }, '"number= %d Buzz\\n"' },
     }, res1)
   end)
 
@@ -577,9 +608,9 @@ void ui_refresh(void)
 
     eq(
       {
-        { 0, 2, 0, 8 },
-        { 1, 2, 1, 8 },
-        { 2, 2, 2, 8 },
+        { 0, 0, 0, 6 },
+        { 1, 0, 1, 6 },
+        { 2, 0, 2, 6 },
       },
       test(
         [[
@@ -605,9 +636,9 @@ void ui_refresh(void)
 
     eq(
       {
-        { 0, 2, 0, 7 },
-        { 1, 2, 1, 8 },
-        { 2, 2, 2, 7 },
+        { 0, 0, 0, 5 },
+        { 1, 0, 1, 6 },
+        { 2, 0, 2, 5 },
       },
       test(
         [[
@@ -644,9 +675,9 @@ void ui_refresh(void)
     end)
 
     eq({
-      { 0, 2, 0, 12 },
-      { 1, 2, 1, 12 },
-      { 2, 2, 2, 12 },
+      { 0, 0, 0, 10 },
+      { 1, 0, 1, 10 },
+      { 2, 0, 2, 10 },
     }, result)
   end)
 
@@ -722,7 +753,25 @@ void ui_refresh(void)
       eq(exp, pcall_err(exec_lua, "vim.treesitter.query.parse('c', ...)", cquery))
     end
 
-    -- Invalid node type
+    -- Invalid node types
+    test(
+      '.../query.lua:0: Query error at 1:2. Invalid node type ">\\">>":\n'
+        .. '">\\">>" @operator\n'
+        .. ' ^',
+      '">\\">>" @operator'
+    )
+    test(
+      '.../query.lua:0: Query error at 1:2. Invalid node type "\\\\":\n'
+        .. '"\\\\" @operator\n'
+        .. ' ^',
+      '"\\\\" @operator'
+    )
+    test(
+      '.../query.lua:0: Query error at 1:2. Invalid node type ">>>":\n'
+        .. '">>>" @operator\n'
+        .. ' ^',
+      '">>>" @operator'
+    )
     test(
       '.../query.lua:0: Query error at 1:2. Invalid node type "dentifier":\n'
         .. '(dentifier) @variable\n'
@@ -761,6 +810,34 @@ void ui_refresh(void)
         .. ' ^',
       '((identifier) @id \n(#eq? @id\n@ok.capture\n))'
     )
+  end)
+
+  it('supports "; extends" modeline in custom queries', function()
+    insert('int zeero = 0;')
+    local result = exec_lua(function()
+      vim.treesitter.query.set(
+        'c',
+        'highlights',
+        [[; extends
+        (identifier) @spell]]
+      )
+      local query = vim.treesitter.query.get('c', 'highlights')
+      local parser = vim.treesitter.get_parser(0, 'c')
+      local root = parser:parse()[1]:root()
+      local res = {}
+      for id, node in query:iter_captures(root, 0) do
+        table.insert(res, { query.captures[id], vim.treesitter.get_node_text(node, 0) })
+      end
+      return res
+    end)
+    eq({
+      { 'type.builtin', 'int' },
+      { 'variable', 'zeero' },
+      { 'spell', 'zeero' },
+      { 'operator', '=' },
+      { 'number', '0' },
+      { 'punctuation.delimiter', ';' },
+    }, result)
   end)
 
   describe('Query:iter_captures', function()
@@ -817,9 +894,9 @@ void ui_refresh(void)
 
       local result = exec_lua(function()
         local query0 = vim.treesitter.query.parse('c', query)
-        local match_preds = query0.match_preds
+        local match_preds = query0._match_predicates
         local called = 0
-        function query0:match_preds(...)
+        function query0:_match_predicates(...)
           called = called + 1
           return match_preds(self, ...)
         end

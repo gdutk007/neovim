@@ -597,7 +597,7 @@ To disable this behavior, set the following variable in your vimrc: >
 	let g:gdscript_recommended_style = 0
 
 
-GIT COMMIT                                              *ft-gitcommit-plugin*
+GIT COMMIT						*ft-gitcommit-plugin*
 
 One command, :DiffGitCached, is provided to show a diff of the current commit
 in the preview window.  It is equivalent to calling "git diff --cached" plus
@@ -630,6 +630,19 @@ HARE							*ft-hare*
 Since the text for this plugin is rather long it has been put in a separate
 file: |ft_hare.txt|.
 
+IDRIS2							*ft-idris2-plugin*
+
+By default the following options are set: >
+
+	setlocal shiftwidth=2 tabstop=2 expandtab
+	setlocal comments=s1:{-,mb:-,ex:-},:\|\|\|,:--
+	setlocal commentstring=--\ %s
+	setlocal wildignore+=*.ibc
+
+To use tabs instead of spaces for indentation, set the following variable
+in your vimrc: >
+
+	let g:idris2#allow_tabchar = 1
 
 JAVA							*ft-java-plugin*
 
@@ -682,7 +695,18 @@ To enable the recognition of Markdown comments each time after removing
 re-source "javaformat.vim" for Vim versions greater than `8.2.1397`: >
 	runtime autoload/javaformat.vim
 <
+LUA							*ft-lua-plugin*
 
+					*g:lua_version* *g:lua_subversion*
+Lua filetype's 'includeexpr' and |ft-lua-syntax| highlighting use the global
+variables "g:lua_version" and "g:lua_subversion" to determine the version of
+Lua to use (5.3 is the default)
+
+For example, to use Lua 5.1, set the variables like this: >
+
+	let g:lua_version = 5
+	let g:lua_subversion = 1
+<
 MAIL							*ft-mail-plugin*
 
 Options:
@@ -695,7 +719,7 @@ Options:
 		You can also format quoted text with |gq|.
 
 Local mappings:
-<LocalLeader>q   or   \\MailQuote
+<LocalLeader>q   or   \MailQuote
 	Quotes the text selected in Visual mode, or from the cursor position
 	to the end of the file in Normal mode.  This means "> " is inserted in
 	each line.
@@ -723,9 +747,9 @@ Man                       Open the manpage for the <cWORD> (man buffers)
 Man!                      Display the current buffer contents as a manpage.
 
 |:Man| accepts command modifiers. For example, to use a vertical split: >vim
-     :vertical Man printf
+    :vertical Man printf
 To reuse the current window: >vim
-     :hide Man printf
+    :hide Man printf
 
 Local mappings:
 K or CTRL-]               Jump to the manpage for the <cWORD> under the
@@ -745,27 +769,32 @@ Variables:
                           empty. Enabled by default. Set |FALSE| to enable soft
                           wrapping.
 
-To use Nvim as a manpager: >sh
-     export MANPAGER='nvim +Man!'
+To use Nvim as a manpager: >bash
+    export MANPAGER='nvim +Man!'
 
 Note that when running `man` from the shell and with that `MANPAGER` in your
 environment, `man` will pre-format the manpage using `groff`. Thus, Nvim
 will inevitably display the manual page as it was passed to it from stdin. One
 of the caveats of this is that the width will _always_ be hard-wrapped and not
-soft wrapped as with `g:man_hardwrap=0`. You can set in your environment: >sh
-     export MANWIDTH=999
+soft wrapped as with `g:man_hardwrap=0`. You can set in your environment: >bash
+    export MANWIDTH=999
 
 So `groff`'s pre-formatting output will be the same as with `g:man_hardwrap=0` i.e soft-wrapped.
 
-To disable bold highlighting: >
-     :highlight link manBold Normal
+To disable bold highlighting: >vim
+    :highlight link manBold Normal
 
-An alternative to using `MANPAGER` in shell can be redefined `man`, for example: >sh
-     man() {
-          nvim "+hide Man $1"
-     }
+Troubleshooting:
 
-MARKDOWN                                                *ft-markdown-plugin*
+If you see an error like: >
+    fuse: mount failed: Permission denied
+this may be caused by AppArmor sandboxing. To fix this, add a local override
+in e.g. `/etc/apparmor.d/local/usr.bin.man`: >bash
+    mount fstype=fuse.nvim options=(ro, nosuid, nodev) -> /tmp/**,
+    /usr/bin/fusermount Ux,
+See also https://github.com/neovim/neovim/issues/30268 .
+
+MARKDOWN						*ft-markdown-plugin*
 
 To enable folding use this: >
 	let g:markdown_folding = 1
@@ -773,6 +802,12 @@ To enable folding use this: >
 'expandtab' will be set by default.  If you do not want that use this: >
 	let g:markdown_recommended_style = 0
 
+
+ORG							*ft-org-plugin*
+
+To enable folding use this: >
+	let g:org_folding = 1
+<
 
 PDF							*ft-pdf-plugin*
 
@@ -851,7 +886,7 @@ To enable this behavior, set the following variable in your vimrc: >
 	let g:rst_style = 1
 
 
-RNOWEB							      *ft-rnoweb-plugin*
+RNOWEB							*ft-rnoweb-plugin*
 
 The 'formatexpr' option is set dynamically with different values for R code
 and for LaTeX code. If you prefer that 'formatexpr' is not set, add to your
@@ -1046,8 +1081,8 @@ To enable: >
 	let g:typst_folding = 1
 <
 							*g:typst_foldnested*
-When |TRUE| the Typst filetype plugin will fold nested heading under their parents
-(default: |TRUE|)
+When |TRUE| the Typst filetype plugin will fold nested heading under their
+parents. (default: |TRUE|)
 
 To disable: >
 	let g:typst_foldnested = 0

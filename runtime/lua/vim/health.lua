@@ -11,7 +11,7 @@
 --- <
 --- Plugin authors are encouraged to write new healthchecks. |health-dev|
 ---
---- Commands                                *health-commands*
+--- COMMANDS                                *health-commands*
 ---
 ---                                                              *:che* *:checkhealth*
 --- :che[ckhealth]  Run all healthchecks.
@@ -39,6 +39,23 @@
 ---                         :checkhealth vim*
 --- <
 ---
+--- USAGE                                                        *health-usage*
+---
+--- Local mappings in the healthcheck buffer:
+---
+--- q               Closes the window.
+---
+--- Global configuration:
+---
+---                                                              *g:health*
+--- g:health  Dictionary with the following optional keys:
+---           - `style` (`'float'|nil`) Set to "float" to display :checkhealth in
+---           a floating window instead of the default behavior.
+---
+---           Example: >lua
+---             vim.g.health = { style = 'float' }
+---
+--- --------------------------------------------------------------------------------
 --- Create a healthcheck                                    *health-dev*
 ---
 --- Healthchecks are functions that check the user environment, configuration, or
@@ -101,7 +118,7 @@ local function filepath_to_healthcheck(path)
     func = 'health#' .. name .. '#check'
     filetype = 'v'
   else
-    local subpath = path:gsub('.*lua/', '')
+    local subpath = path:gsub('.*/lua/', '')
     if vim.fs.basename(subpath) == 'health.lua' then
       -- */health.lua
       name = vim.fs.dirname(subpath)
@@ -109,7 +126,7 @@ local function filepath_to_healthcheck(path)
       -- */health/init.lua
       name = vim.fs.dirname(vim.fs.dirname(subpath))
     end
-    name = name:gsub('/', '.')
+    name = assert(name:gsub('/', '.')) --- @type string
 
     func = 'require("' .. name .. '.health").check()'
     filetype = 'l'
@@ -169,18 +186,13 @@ local function get_healthcheck(plugin_names)
   return healthchecks
 end
 
---- Indents lines *except* line 1 of a string if it contains newlines.
+--- Indents lines *except* line 1 of a multiline string.
 ---
 --- @param s string
 --- @param columns integer
 --- @return string
 local function indent_after_line1(s, columns)
-  local lines = vim.split(s, '\n')
-  local indent = string.rep(' ', columns)
-  for i = 2, #lines do
-    lines[i] = indent .. lines[i]
-  end
-  return table.concat(lines, '\n')
+  return (vim.text.indent(columns, s):gsub('^%s+', ''))
 end
 
 --- Changes ':h clipboard' to ':help |clipboard|'.
@@ -218,7 +230,7 @@ local function format_report_message(status, msg, ...)
     -- Report each suggestion
     for _, v in ipairs(varargs) do
       if v then
-        output = output .. '\n    - ' .. indent_after_line1(v, 6)
+        output = output .. '\n    - ' .. indent_after_line1(v, 6) --- @type string
       end
     end
   end
@@ -331,13 +343,31 @@ function M._check(mods, plugin_names)
 
   local emptybuf = vim.fn.bufnr('$') == 1 and vim.fn.getline(1) == '' and 1 == vim.fn.line('$')
 
-  -- When no command modifiers are used:
-  -- - If the current buffer is empty, open healthcheck directly.
-  -- - If not specified otherwise open healthcheck in a tab.
-  local buf_cmd = #mods > 0 and (mods .. ' sbuffer') or emptybuf and 'buffer' or 'tab sbuffer'
-
   local bufnr = vim.api.nvim_create_buf(true, true)
-  vim.cmd(buf_cmd .. ' ' .. bufnr)
+  if
+    vim.g.health
+    and type(vim.g.health) == 'table'
+    and vim.tbl_get(vim.g.health, 'style') == 'float'
+  then
+    local max_height = math.floor(vim.o.lines * 0.8)
+    local max_width = 80
+    local float_bufnr, float_winid = vim.lsp.util.open_floating_preview({}, '', {
+      height = max_height,
+      width = max_width,
+      offset_x = math.floor((vim.o.columns - max_width) / 2),
+      offset_y = math.floor((vim.o.lines - max_height) / 2) - 1,
+      relative = 'editor',
+    })
+    vim.api.nvim_set_current_win(float_winid)
+    vim.bo[float_bufnr].modifiable = true
+    vim.wo[float_winid].list = false
+  else
+    -- When no command modifiers are used:
+    -- - If the current buffer is empty, open healthcheck directly.
+    -- - If not specified otherwise open healthcheck in a tab.
+    local buf_cmd = #mods > 0 and (mods .. ' sbuffer') or emptybuf and 'buffer' or 'tab sbuffer'
+    vim.cmd(buf_cmd .. ' ' .. bufnr)
+  end
 
   if vim.fn.bufexists('health://') == 1 then
     vim.cmd.bwipe('health://')
@@ -407,6 +437,16 @@ function M._check(mods, plugin_names)
   -- Clear the 'Running healthchecks...' message.
   vim.cmd.redraw()
   vim.print('')
+
+  -- Quit with 'q' inside healthcheck buffers.
+  vim.keymap.set('n', 'q', function()
+    if not pcall(vim.cmd.close) then
+      vim.cmd.bdelete()
+    end
+  end, { buffer = bufnr, silent = true, noremap = true, nowait = true })
+
+  -- Once we're done writing checks, set nomodifiable.
+  vim.bo[bufnr].modifiable = false
 end
 
 return M

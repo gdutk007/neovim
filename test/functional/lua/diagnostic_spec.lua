@@ -5,6 +5,7 @@ local command = n.command
 local clear = n.clear
 local exec_lua = n.exec_lua
 local eq = t.eq
+local neq = t.neq
 local matches = t.matches
 local api = n.api
 local pcall_err = t.pcall_err
@@ -112,6 +113,18 @@ describe('vim.diagnostic', function()
         )
       end
 
+      function _G.get_virt_lines_extmarks(ns)
+        ns = vim.diagnostic.get_namespace(ns)
+        local virt_lines_ns = ns.user_data.virt_lines_ns
+        return vim.api.nvim_buf_get_extmarks(
+          _G.diagnostic_bufnr,
+          virt_lines_ns,
+          0,
+          -1,
+          { details = true }
+        )
+      end
+
       ---@param ns integer
       function _G.get_underline_extmarks(ns)
         ---@type integer
@@ -160,6 +173,11 @@ describe('vim.diagnostic', function()
       'DiagnosticUnderlineOk',
       'DiagnosticUnderlineWarn',
       'DiagnosticUnnecessary',
+      'DiagnosticVirtualLinesError',
+      'DiagnosticVirtualLinesHint',
+      'DiagnosticVirtualLinesInfo',
+      'DiagnosticVirtualLinesOk',
+      'DiagnosticVirtualLinesWarn',
       'DiagnosticVirtualTextError',
       'DiagnosticVirtualTextHint',
       'DiagnosticVirtualTextInfo',
@@ -368,6 +386,9 @@ describe('vim.diagnostic', function()
   end)
 
   it('handles one namespace clearing highlights while the other still has highlights', function()
+    exec_lua(function()
+      vim.diagnostic.config({ virtual_text = true })
+    end)
     -- 1 Error (1)
     -- 1 Warning (2)
     -- 1 Warning (2) + 1 Warning (1)
@@ -442,6 +463,10 @@ describe('vim.diagnostic', function()
   end)
 
   it('does not display diagnostics when disabled', function()
+    exec_lua(function()
+      vim.diagnostic.config({ virtual_text = true })
+    end)
+
     eq(
       { 0, 2 },
       exec_lua(function()
@@ -574,7 +599,7 @@ describe('vim.diagnostic', function()
         vim.diagnostic.set(
           _G.diagnostic_ns,
           _G.diagnostic_bufnr,
-          { { lnum = 0, end_lnum = 0, col = 0, end_col = 0 } }
+          { { message = '', lnum = 0, end_lnum = 0, col = 0, end_col = 0 } }
         )
         vim.cmd('bwipeout! ' .. _G.diagnostic_bufnr)
 
@@ -915,6 +940,10 @@ describe('vim.diagnostic', function()
 
   describe('reset()', function()
     it('diagnostic count is 0 and displayed diagnostics are 0 after call', function()
+      exec_lua(function()
+        vim.diagnostic.config({ virtual_text = true })
+      end)
+
       -- 1 Error (1)
       -- 1 Warning (2)
       -- 1 Warning (2) + 1 Warning (1)
@@ -1005,7 +1034,7 @@ describe('vim.diagnostic', function()
         vim.diagnostic.set(
           _G.diagnostic_ns,
           _G.diagnostic_bufnr,
-          { { lnum = 0, end_lnum = 0, col = 0, end_col = 0 } }
+          { { message = '', lnum = 0, end_lnum = 0, col = 0, end_col = 0 } }
         )
         vim.cmd('bwipeout! ' .. _G.diagnostic_bufnr)
 
@@ -2105,6 +2134,243 @@ describe('vim.diagnostic', function()
         end)
       )
     end)
+
+    it('can filter diagnostics by returning nil when formatting', function()
+      local result = exec_lua(function()
+        vim.diagnostic.config {
+          virtual_text = {
+            format = function(diagnostic)
+              if diagnostic.code == 'foo_err' then
+                return nil
+              end
+              return diagnostic.message
+            end,
+          },
+        }
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('An error here!', 0, 0, 0, 0, 'foo_server', 'foo_err'),
+          _G.make_error('An error there!', 1, 1, 1, 1, 'bar_server', 'bar_err'),
+        })
+
+        local extmarks = _G.get_virt_text_extmarks(_G.diagnostic_ns)
+        return extmarks
+      end)
+
+      eq(1, #result)
+      eq(' An error there!', result[1][4].virt_text[3][1])
+    end)
+
+    it('can only show virtual_text for the current line', function()
+      local result = exec_lua(function()
+        vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+        vim.diagnostic.config({ virtual_text = { current_line = true } })
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Error here!', 0, 0, 0, 0, 'foo_server'),
+          _G.make_error('Another error there!', 1, 0, 1, 0, 'foo_server'),
+        })
+
+        local extmarks = _G.get_virt_text_extmarks(_G.diagnostic_ns)
+        return extmarks
+      end)
+
+      eq(1, #result)
+      eq(' Error here!', result[1][4].virt_text[3][1])
+    end)
+  end)
+
+  describe('handlers.virtual_lines', function()
+    it('includes diagnostic code and message', function()
+      local result = exec_lua(function()
+        vim.diagnostic.config({ virtual_lines = true })
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Missed symbol `,`', 0, 0, 0, 0, 'lua_ls', 'miss-symbol'),
+        })
+
+        local extmarks = _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return extmarks[1][4].virt_lines
+      end)
+
+      eq('miss-symbol: Missed symbol `,`', result[1][3][1])
+    end)
+
+    it('adds space to the left of the diagnostic', function()
+      local error_offset = 5
+      local result = exec_lua(function()
+        vim.diagnostic.config({ virtual_lines = true })
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Error here!', 0, error_offset, 0, error_offset, 'foo_server'),
+        })
+
+        local extmarks = _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return extmarks[1][4].virt_lines
+      end)
+
+      eq(error_offset, result[1][1][1]:len())
+    end)
+
+    it('highlights diagnostics in multiple lines by default', function()
+      local result = exec_lua(function()
+        vim.diagnostic.config({ virtual_lines = true })
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Error here!', 0, 0, 0, 0, 'foo_server'),
+          _G.make_error('Another error there!', 1, 0, 1, 0, 'foo_server'),
+        })
+
+        local extmarks = _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return extmarks
+      end)
+
+      eq(2, #result)
+      eq('Error here!', result[1][4].virt_lines[1][3][1])
+      eq('Another error there!', result[2][4].virt_lines[1][3][1])
+    end)
+
+    it('highlights multiple diagnostics in a single line by default', function()
+      local result = exec_lua(function()
+        vim.api.nvim_buf_set_lines(
+          _G.diagnostic_bufnr,
+          0,
+          -1,
+          false,
+          { 'def foo(x: int, /, y: str, *, z: float) -> None: ...' }
+        )
+
+        vim.diagnostic.config({ virtual_lines = true })
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Error here!', 0, 8, 0, 9, 'foo_server'),
+          _G.make_error('Another error there!', 0, 19, 0, 20, 'foo_server'),
+          _G.make_error('And another one!', 0, 30, 0, 31, 'foo_server'),
+        })
+
+        local extmarks = _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return extmarks
+      end)
+
+      --[[
+      |def foo(x: int, /, y: str, *, z: float) -> None: ...
+      |        │          │          └──── And another one!
+      |        │          └──── Another error there!
+      |        └──── Error here!
+      |        ^ col=8
+      |                   ^ col=19
+      |                              ^ col=30
+
+      11 cols between each diagnostic after the first one (10 spaces + |)
+      ]]
+
+      eq(1, #result)
+      local virt_lines = result[1][4].virt_lines
+      eq(8, virt_lines[1][1][1]:len()) -- first space
+      eq(10, virt_lines[1][3][1]:len()) -- second space
+      eq(10, virt_lines[1][5][1]:len()) -- third space
+      eq('And another one!', virt_lines[1][7][1])
+      eq(8, virt_lines[2][1][1]:len()) -- first space
+      eq(10, virt_lines[2][3][1]:len()) -- second space
+      eq('Another error there!', virt_lines[2][5][1])
+      eq(8, virt_lines[3][1][1]:len()) -- first space
+      eq('Error here!', virt_lines[3][3][1])
+    end)
+
+    it('highlights overlapping diagnostics on a single line', function()
+      local result = exec_lua(function()
+        vim.diagnostic.config({ virtual_lines = true })
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Error here!', 0, 10, 0, 11, 'foo_server'),
+          _G.make_error('Another error here!', 0, 10, 0, 11, 'foo_server'),
+        })
+
+        local extmarks = _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return extmarks
+      end)
+
+      --[[
+      |1234567890x
+      |          ├──── Another error here!
+      |          └──── Error here!
+      ]]
+
+      eq(1, #result)
+      local virt_lines = result[1][4].virt_lines
+      eq(10, virt_lines[1][1][1]:len()) -- first space
+      eq('├──── ', virt_lines[1][2][1])
+      eq('Another error here!', virt_lines[1][3][1])
+      eq(10, virt_lines[2][1][1]:len()) -- second space
+      eq('└──── ', virt_lines[2][2][1])
+      eq('Error here!', virt_lines[2][3][1])
+    end)
+
+    it('handles multi-line diagnostic message', function()
+      local result = exec_lua(function()
+        vim.diagnostic.config({ virtual_lines = true })
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Error here!\ngot another line', 0, 10, 0, 11, 'foo_server'),
+        })
+
+        local extmarks = _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return extmarks
+      end)
+
+      --[[
+      |1234567890x
+      |          └──── Error here!
+      |                got another line
+      ]]
+
+      eq(1, #result)
+      local virt_lines = result[1][4].virt_lines
+      eq(10, virt_lines[1][1][1]:len()) -- first space
+      eq('└──── ', virt_lines[1][2][1])
+      eq('Error here!', virt_lines[1][3][1])
+      eq(10, virt_lines[2][1][1]:len()) -- second line space
+      eq(6, virt_lines[2][2][1]:len()) -- extra padding
+      eq('got another line', virt_lines[2][3][1])
+    end)
+
+    it('can highlight diagnostics only in the current line', function()
+      local result = exec_lua(function()
+        vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+        vim.diagnostic.config({ virtual_lines = { current_line = true } })
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Error here!', 0, 0, 0, 0, 'foo_server'),
+          _G.make_error('Another error there!', 1, 0, 1, 0, 'foo_server'),
+        })
+
+        local extmarks = _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return extmarks
+      end)
+
+      eq(1, #result)
+      eq('Error here!', result[1][4].virt_lines[1][3][1])
+    end)
+
+    it('supports a format function for diagnostic messages', function()
+      local result = exec_lua(function()
+        vim.diagnostic.config({
+          virtual_lines = {
+            format = function()
+              return 'Error here!'
+            end,
+          },
+        })
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Invalid syntax', 0, 0, 0, 0),
+        })
+        local extmarks = _G.get_virt_lines_extmarks(_G.diagnostic_ns)
+        return extmarks[1][4].virt_lines
+      end)
+      eq('Error here!', result[1][3][1])
+    end)
   end)
 
   describe('set()', function()
@@ -2116,7 +2382,11 @@ describe('vim.diagnostic', function()
     end)
 
     it('can perform updates after insert_leave', function()
-      exec_lua [[vim.api.nvim_set_current_buf( _G.diagnostic_bufnr)]]
+      exec_lua(function()
+        vim.diagnostic.config({ virtual_text = true })
+        vim.api.nvim_set_current_buf(_G.diagnostic_bufnr)
+      end)
+
       api.nvim_input('o')
       eq({ mode = 'i', blocking = false }, api.nvim_get_mode())
 
@@ -2257,7 +2527,10 @@ describe('vim.diagnostic', function()
     end)
 
     it('can perform updates while in insert mode, if desired', function()
-      exec_lua [[vim.api.nvim_set_current_buf( _G.diagnostic_bufnr)]]
+      exec_lua(function()
+        vim.diagnostic.config({ virtual_text = true })
+        vim.api.nvim_set_current_buf(_G.diagnostic_bufnr)
+      end)
       api.nvim_input('o')
       eq({ mode = 'i', blocking = false }, api.nvim_get_mode())
 
@@ -2291,6 +2564,10 @@ describe('vim.diagnostic', function()
     end)
 
     it('can set diagnostics without displaying them', function()
+      exec_lua(function()
+        vim.diagnostic.config({ virtual_text = true })
+      end)
+
       eq(
         0,
         exec_lua(function()
@@ -3209,6 +3486,74 @@ describe('vim.diagnostic', function()
       end)
 
       assert(loc_list[1].lnum < loc_list[2].lnum)
+    end)
+  end)
+
+  describe('setqflist()', function()
+    it('updates existing diagnostics quickfix if one already exists', function()
+      local result = exec_lua(function()
+        vim.api.nvim_win_set_buf(0, _G.diagnostic_bufnr)
+
+        vim.fn.setqflist({}, ' ', { title = 'Diagnostics' })
+        local diagnostics_qf_id = vim.fn.getqflist({ id = 0 }).id
+
+        vim.diagnostic.setqflist({ title = 'Diagnostics' })
+        local qf_id = vim.fn.getqflist({ id = 0, nr = '$' }).id
+
+        return { diagnostics_qf_id, qf_id }
+      end)
+
+      eq(result[1], result[2])
+    end)
+
+    it('navigates to existing diagnostics quickfix if one already exists and open=true', function()
+      local result = exec_lua(function()
+        vim.api.nvim_win_set_buf(0, _G.diagnostic_bufnr)
+
+        vim.fn.setqflist({}, ' ', { title = 'Diagnostics' })
+        local diagnostics_qf_id = vim.fn.getqflist({ id = 0 }).id
+
+        vim.fn.setqflist({}, ' ', { title = 'Other' })
+
+        vim.diagnostic.setqflist({ title = 'Diagnostics', open = true })
+        local qf_id = vim.fn.getqflist({ id = 0 }).id
+
+        return { diagnostics_qf_id, qf_id }
+      end)
+
+      eq(result[1], result[2])
+    end)
+
+    it('sets new diagnostics quickfix as active when open=true', function()
+      local result = exec_lua(function()
+        vim.api.nvim_win_set_buf(0, _G.diagnostic_bufnr)
+
+        vim.fn.setqflist({}, ' ', { title = 'Other' })
+        local other_qf_id = vim.fn.getqflist({ id = 0 }).id
+
+        vim.diagnostic.setqflist({ title = 'Diagnostics', open = true })
+        local qf_id = vim.fn.getqflist({ id = 0 }).id
+
+        return { other_qf_id, qf_id }
+      end)
+
+      neq(result[1], result[2])
+    end)
+
+    it('opens quickfix window when open=true', function()
+      local qf_winid = exec_lua(function()
+        vim.api.nvim_win_set_buf(0, _G.diagnostic_bufnr)
+
+        vim.diagnostic.set(_G.diagnostic_ns, _G.diagnostic_bufnr, {
+          _G.make_error('Error', 1, 1, 1, 1),
+        })
+
+        vim.diagnostic.setqflist({ open = true })
+
+        return vim.fn.getqflist({ winid = 0 }).winid
+      end)
+
+      neq(0, qf_winid)
     end)
   end)
 

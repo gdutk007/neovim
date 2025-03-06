@@ -28,6 +28,7 @@
 #include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/typval_defs.h"
 #include "nvim/ex_cmds2.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_getln.h"
@@ -40,7 +41,6 @@
 #include "nvim/getchar_defs.h"
 #include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
-#include "nvim/highlight.h"
 #include "nvim/highlight_defs.h"
 #include "nvim/indent.h"
 #include "nvim/indent_c.h"
@@ -48,6 +48,7 @@
 #include "nvim/macros_defs.h"
 #include "nvim/mark.h"
 #include "nvim/mark_defs.h"
+#include "nvim/math.h"
 #include "nvim/mbyte.h"
 #include "nvim/mbyte_defs.h"
 #include "nvim/memline.h"
@@ -75,7 +76,6 @@
 #include "nvim/ui_defs.h"
 #include "nvim/undo.h"
 #include "nvim/vim_defs.h"
-#include "nvim/window.h"
 
 static yankreg_T y_regs[NUM_REGISTERS] = { 0 };
 
@@ -257,7 +257,7 @@ void op_shift(oparg_T *oap, bool curs_top, int amount)
     vim_snprintf(IObuff, IOSIZE,
                  NGETTEXT(msg_line_single, msg_line_plural, oap->line_count),
                  (int64_t)oap->line_count, op, amount);
-    msg_attr_keep(IObuff, 0, true, false);
+    msg_keep(IObuff, 0, true, false);
   }
 
   if ((cmdmod.cmod_flags & CMOD_LOCKMARKS) == 0) {
@@ -273,21 +273,53 @@ void op_shift(oparg_T *oap, bool curs_top, int amount)
   changed_lines(curbuf, oap->start.lnum, 0, oap->end.lnum + 1, 0, true);
 }
 
-/// Shift the current line one shiftwidth left (if left != 0) or right
-/// leaves cursor on first blank in the line.
-///
-/// @param call_changed_bytes  call changed_bytes()
-void shift_line(bool left, bool round, int amount, int call_changed_bytes)
+/// Return the tabstop width at the index of the variable tabstop array.  If an
+/// index greater than the length of the array is given, the last tabstop width
+/// in the array is returned.
+static int get_vts(const int *vts_array, int index)
 {
-  int sw_val = get_sw_value_indent(curbuf, left);
-  if (sw_val == 0) {
-    sw_val = 1;              // shouldn't happen, just in case
+  int ts;
+
+  if (index < 1) {
+    ts = 0;
+  } else if (index <= vts_array[0]) {
+    ts = vts_array[index];
+  } else {
+    ts = vts_array[vts_array[0]];
   }
-  int count = get_indent();  // get current indent
+
+  return ts;
+}
+
+/// Return the sum of all the tabstops through the index-th.
+static int get_vts_sum(const int *vts_array, int index)
+{
+  int sum = 0;
+  int i;
+
+  // Perform the summation for indeces within the actual array.
+  for (i = 1; i <= index && i <= vts_array[0]; i++) {
+    sum += vts_array[i];
+  }
+
+  // Add topstops whose indeces exceed the actual array.
+  if (i <= index) {
+    sum += vts_array[vts_array[0]] * (index - vts_array[0]);
+  }
+
+  return sum;
+}
+
+/// @param left    true if shift is to the left
+/// @param count   true if new indent is to be to a tabstop
+/// @param amount  number of shifts
+static int64_t get_new_sw_indent(bool left, bool round, int64_t amount, int64_t sw_val)
+{
+  int64_t count = get_indent();  // get current indent
 
   if (round) {  // round off indent
-    int i = count / sw_val;  // number of 'shiftwidth' rounded down
-    int j = count % sw_val;  // extra spaces
+    int64_t i = trim_to_int(count / sw_val);  // number of 'shiftwidth' rounded down
+    int64_t j = trim_to_int(count % sw_val);  // extra spaces
     if (j && left) {  // first remove extra spaces
       amount--;
     }
@@ -305,11 +337,94 @@ void shift_line(bool left, bool round, int amount, int call_changed_bytes)
     }
   }
 
+  return count;
+}
+
+/// @param left    true if shift is to the left
+/// @param count   true if new indent is to be to a tabstop
+/// @param amount  number of shifts
+static int64_t get_new_vts_indent(bool left, bool round, int amount, int *vts_array)
+{
+  int64_t indent = get_indent();
+  int vtsi = 0;
+  int vts_indent = 0;
+  int ts = 0;         // Silence uninitialized variable warning.
+
+  // Find the tabstop at or to the left of the current indent.
+  while (vts_indent <= indent) {
+    vtsi++;
+    ts = get_vts(vts_array, vtsi);
+    vts_indent += ts;
+  }
+  vts_indent -= ts;
+  vtsi--;
+
+  // Extra indent spaces to the right of the tabstop
+  int64_t offset = indent - vts_indent;
+
+  if (round) {
+    if (left) {
+      if (offset == 0) {
+        indent = get_vts_sum(vts_array, vtsi - amount);
+      } else {
+        indent = get_vts_sum(vts_array, vtsi - (amount - 1));
+      }
+    } else {
+      indent = get_vts_sum(vts_array, vtsi + amount);
+    }
+  } else {
+    if (left) {
+      if (amount > vtsi) {
+        indent = 0;
+      } else {
+        indent = get_vts_sum(vts_array, vtsi - amount) + offset;
+      }
+    } else {
+      indent = get_vts_sum(vts_array, vtsi + amount) + offset;
+    }
+  }
+
+  return indent;
+}
+
+/// Shift the current line 'amount' shiftwidth(s) left (if 'left' is true) or
+/// right.
+///
+/// The rules for choosing a shiftwidth are:  If 'shiftwidth' is non-zero, use
+/// 'shiftwidth'; else if 'vartabstop' is not empty, use 'vartabstop'; else use
+/// 'tabstop'.  The Vim documentation says nothing about 'softtabstop' or
+/// 'varsofttabstop' affecting the shiftwidth, and neither affects the
+/// shiftwidth in current versions of Vim, so they are not considered here.
+///
+/// @param left                true if shift is to the left
+/// @param count               true if new indent is to be to a tabstop
+/// @param amount              number of shifts
+/// @param call_changed_bytes  call changed_bytes()
+void shift_line(bool left, bool round, int amount, int call_changed_bytes)
+{
+  int64_t count;
+  int64_t sw_val = curbuf->b_p_sw;
+  int64_t ts_val = curbuf->b_p_ts;
+  int *vts_array = curbuf->b_p_vts_array;
+
+  if (sw_val != 0) {
+    // 'shiftwidth' is not zero; use it as the shift size.
+    count = get_new_sw_indent(left, round, amount, sw_val);
+  } else if ((vts_array == NULL) || (vts_array[0] == 0)) {
+    // 'shiftwidth' is zero and 'vartabstop' is empty; use 'tabstop' as the
+    // shift size.
+    count = get_new_sw_indent(left, round, amount, ts_val);
+  } else {
+    // 'shiftwidth' is zero and 'vartabstop' is defined; use 'vartabstop'
+    // to determine the new indent.
+    count = get_new_vts_indent(left, round, amount, vts_array);
+  }
+
   // Set new indent
   if (State & VREPLACE_FLAG) {
-    change_indent(INDENT_SET, count, false, call_changed_bytes);
+    change_indent(INDENT_SET, trim_to_int(count), false, call_changed_bytes);
   } else {
-    set_indent(count, call_changed_bytes ? SIN_CHANGED : 0);
+    set_indent(trim_to_int(count), call_changed_bytes ? SIN_CHANGED : 0);
   }
 }
 
@@ -2187,7 +2302,7 @@ void op_insert(oparg_T *oap, int count1)
       if (u_save_cursor() == FAIL) {
         return;
       }
-      curwin->w_ve_flags = VE_ALL;
+      curwin->w_ve_flags = kOptVeFlagAll;
       coladvance_force(oap->op_type == OP_APPEND
                        ? oap->end_vcol + 1 : getviscol());
       if (oap->op_type == OP_APPEND) {
@@ -2691,6 +2806,10 @@ static void op_yank_reg(oparg_T *oap, bool message, yankreg_T *reg, bool append)
       curbuf->b_op_start.col = 0;
       curbuf->b_op_end.col = MAXCOL;
     }
+    if (yank_type != kMTLineWise && !oap->inclusive) {
+      // Exclude the end position.
+      decl(&curbuf->b_op_end);
+    }
   }
 }
 
@@ -2873,7 +2992,7 @@ void do_put(int regname, yankreg_T *reg, int dir, int count, int flags)
           eol = (*(cursor_pos + utfc_ptr2len(cursor_pos)) == NUL);
         }
 
-        bool ve_allows = (cur_ve_flags == VE_ALL || cur_ve_flags == VE_ONEMORE);
+        bool ve_allows = (cur_ve_flags == kOptVeFlagAll || cur_ve_flags == kOptVeFlagOnemore);
         bool eof = curbuf->b_ml.ml_line_count == curwin->w_cursor.lnum
                    && one_past_line;
         if (ve_allows || !(eol || eof)) {
@@ -3057,7 +3176,7 @@ void do_put(int regname, yankreg_T *reg, int dir, int count, int flags)
     goto end;
   }
 
-  if (cur_ve_flags == VE_ALL && y_type == kMTCharWise) {
+  if (cur_ve_flags == kOptVeFlagAll && y_type == kMTCharWise) {
     if (gchar_cursor() == TAB) {
       int viscol = getviscol();
       OptInt ts = curbuf->b_p_ts;
@@ -3086,7 +3205,7 @@ void do_put(int regname, yankreg_T *reg, int dir, int count, int flags)
     colnr_T endcol2 = 0;
 
     if (dir == FORWARD && c != NUL) {
-      if (cur_ve_flags == VE_ALL) {
+      if (cur_ve_flags == kOptVeFlagAll) {
         getvcol(curwin, &curwin->w_cursor, &col, NULL, &endcol2);
       } else {
         getvcol(curwin, &curwin->w_cursor, NULL, NULL, &col);
@@ -3100,7 +3219,7 @@ void do_put(int regname, yankreg_T *reg, int dir, int count, int flags)
     }
 
     col += curwin->w_cursor.coladd;
-    if (cur_ve_flags == VE_ALL
+    if (cur_ve_flags == kOptVeFlagAll
         && (curwin->w_cursor.coladd > 0 || endcol2 == curwin->w_cursor.col)) {
       if (dir == FORWARD && c == NUL) {
         col++;
@@ -3508,7 +3627,7 @@ error:
       // Put the '] mark on the first byte of the last inserted character.
       // Correct the length for change in indent.
       curbuf->b_op_end.lnum = new_lnum;
-      col = (colnr_T)y_array[y_size - 1].size - lendiff;
+      col = MAX(0, (colnr_T)y_array[y_size - 1].size - lendiff);
       if (col > 1) {
         curbuf->b_op_end.col = col - 1;
         if (y_array[y_size - 1].size > 0) {
@@ -3560,7 +3679,7 @@ error:
   // Make sure the cursor is not after the NUL.
   int len = get_cursor_line_len();
   if (curwin->w_cursor.col > len) {
-    if (cur_ve_flags == VE_ALL) {
+    if (cur_ve_flags == kOptVeFlagAll) {
       curwin->w_cursor.coladd = curwin->w_cursor.col - len;
     }
     curwin->w_cursor.col = len;
@@ -3592,7 +3711,7 @@ void adjust_cursor_eol(void)
 
   const bool adj_cursor = (curwin->w_cursor.col > 0
                            && gchar_cursor() == NUL
-                           && (cur_ve_flags & VE_ONEMORE) == 0
+                           && (cur_ve_flags & kOptVeFlagOnemore) == 0
                            && !(restart_edit || (State & MODE_INSERT)));
   if (!adj_cursor) {
     return;
@@ -3601,7 +3720,7 @@ void adjust_cursor_eol(void)
   // Put the cursor on the last character in the line.
   dec_cursor();
 
-  if (cur_ve_flags == VE_ALL) {
+  if (cur_ve_flags == kOptVeFlagAll) {
     colnr_T scol, ecol;
 
     // Coladd is set to the width of the last character.
@@ -3653,12 +3772,18 @@ void ex_display(exarg_T *eap)
   if (arg != NULL && *arg == NUL) {
     arg = NULL;
   }
-  int attr = HL_ATTR(HLF_8);
+  int hl_id = HLF_8;
 
+  msg_ext_set_kind("list_cmd");
+  msg_ext_skip_flush = true;
   // Highlight title
   msg_puts_title(_("\nType Name Content"));
   for (int i = -1; i < NUM_REGISTERS && !got_int; i++) {
     int name = get_register_name(i);
+    if (arg != NULL && vim_strchr(arg, name) == NULL) {
+      continue;             // did not ask for this register
+    }
+
     switch (get_reg_type(name, NULL)) {
     case kMTLineWise:
       type = 'l'; break;
@@ -3666,10 +3791,6 @@ void ex_display(exarg_T *eap)
       type = 'c'; break;
     default:
       type = 'b'; break;
-    }
-
-    if (arg != NULL && vim_strchr(arg, name) == NULL) {
-      continue;             // did not ask for this register
     }
 
     if (i == -1) {
@@ -3709,18 +3830,18 @@ void ex_display(exarg_T *eap)
         int n = Columns - 11;
         for (size_t j = 0; j < yb->y_size && n > 1; j++) {
           if (j) {
-            msg_puts_attr("^J", attr);
+            msg_puts_hl("^J", hl_id, false);
             n -= 2;
           }
           for (p = yb->y_array[j].data;
                *p != NUL && (n -= ptr2cells(p)) >= 0; p++) {
             int clen = utfc_ptr2len(p);
-            msg_outtrans_len(p, clen, 0);
+            msg_outtrans_len(p, clen, 0, false);
             p += clen - 1;
           }
         }
         if (n > 1 && yb->y_type == kMTLineWise) {
-          msg_puts_attr("^J", attr);
+          msg_puts_hl("^J", hl_id, false);
         }
       }
       os_breakcheck();
@@ -3775,6 +3896,7 @@ void ex_display(exarg_T *eap)
     msg_puts("\n  c  \"=   ");
     dis_msg(expr_line, false);
   }
+  msg_ext_skip_flush = false;
 }
 
 /// display a string for do_dis()
@@ -3790,10 +3912,10 @@ static void dis_msg(const char *p, bool skip_esc)
          && (n -= ptr2cells(p)) >= 0) {
     int l;
     if ((l = utfc_ptr2len(p)) > 1) {
-      msg_outtrans_len(p, l, 0);
+      msg_outtrans_len(p, l, 0, false);
       p += l;
     } else {
-      msg_outtrans_len(p++, 1, 0);
+      msg_outtrans_len(p++, 1, 0, false);
     }
   }
   os_breakcheck();
@@ -4230,6 +4352,7 @@ void charwise_block_prep(pos_T start, pos_T end, struct block_def *bdp, linenr_T
   colnr_T endcol = MAXCOL;
   colnr_T cs, ce;
   char *p = ml_get(lnum);
+  int plen = ml_get_len(lnum);
 
   bdp->startspaces = 0;
   bdp->endspaces = 0;
@@ -4279,7 +4402,7 @@ void charwise_block_prep(pos_T start, pos_T end, struct block_def *bdp, linenr_T
     bdp->textlen = endcol - startcol + inclusive;
   }
   bdp->textcol = startcol;
-  bdp->textstart = p + startcol;
+  bdp->textstart = startcol <= plen ? p + startcol : p;
 }
 
 /// Handle the add/subtract operator.
@@ -4394,8 +4517,6 @@ void op_addsub(oparg_T *oap, linenr_T Prenum1, bool g_cmd)
 /// @return true if some character was changed.
 bool do_addsub(int op_type, pos_T *pos, int length, linenr_T Prenum1)
 {
-  char *buf1 = NULL;
-  char buf2[NUMBUFLEN];
   int pre;  // 'X' or 'x': hex; '0': octal; 'B' or 'b': bin
   static bool hexupper = false;  // 0xABC
   uvarnumber_T n;
@@ -4659,7 +4780,7 @@ bool do_addsub(int op_type, pos_T *pos, int length, linenr_T Prenum1)
     // Prepare the leading characters in buf1[].
     // When there are many leading zeros it could be very long.
     // Allocate a bit too much.
-    buf1 = xmalloc((size_t)length + NUMBUFLEN);
+    char *buf1 = xmalloc((size_t)length + NUMBUFLEN);
     ptr = buf1;
     if (negative && (!visual || was_positive)) {
       *ptr++ = '-';
@@ -4674,9 +4795,10 @@ bool do_addsub(int op_type, pos_T *pos, int length, linenr_T Prenum1)
     }
 
     // Put the number characters in buf2[].
+    char buf2[NUMBUFLEN];
+    int buf2len = 0;
     if (pre == 'b' || pre == 'B') {
       size_t bits = 0;
-      size_t i = 0;
 
       // leading zeros
       for (bits = 8 * sizeof(n); bits > 0; bits--) {
@@ -4685,21 +4807,21 @@ bool do_addsub(int op_type, pos_T *pos, int length, linenr_T Prenum1)
         }
       }
 
-      while (bits > 0 && i < NUMBUFLEN - 1) {
-        buf2[i++] = ((n >> --bits) & 0x1) ? '1' : '0';
+      while (bits > 0 && buf2len < NUMBUFLEN - 1) {
+        buf2[buf2len++] = ((n >> --bits) & 0x1) ? '1' : '0';
       }
 
-      buf2[i] = NUL;
+      buf2[buf2len] = NUL;
     } else if (pre == 0) {
-      vim_snprintf(buf2, ARRAY_SIZE(buf2), "%" PRIu64, (uint64_t)n);
+      buf2len = vim_snprintf(buf2, ARRAY_SIZE(buf2), "%" PRIu64, (uint64_t)n);
     } else if (pre == '0') {
-      vim_snprintf(buf2, ARRAY_SIZE(buf2), "%" PRIo64, (uint64_t)n);
+      buf2len = vim_snprintf(buf2, ARRAY_SIZE(buf2), "%" PRIo64, (uint64_t)n);
     } else if (hexupper) {
-      vim_snprintf(buf2, ARRAY_SIZE(buf2), "%" PRIX64, (uint64_t)n);
+      buf2len = vim_snprintf(buf2, ARRAY_SIZE(buf2), "%" PRIX64, (uint64_t)n);
     } else {
-      vim_snprintf(buf2, ARRAY_SIZE(buf2), "%" PRIx64, (uint64_t)n);
+      buf2len = vim_snprintf(buf2, ARRAY_SIZE(buf2), "%" PRIx64, (uint64_t)n);
     }
-    length -= (int)strlen(buf2);
+    length -= buf2len;
 
     // Adjust number of zeros to the new number of digits, so the
     // total length of the number remains the same.
@@ -4711,8 +4833,14 @@ bool do_addsub(int op_type, pos_T *pos, int length, linenr_T Prenum1)
       }
     }
     *ptr = NUL;
-    strcat(buf1, buf2);
-    ins_str(buf1);              // insert the new number
+    int buf1len = (int)(ptr - buf1);
+
+    STRCPY(buf1 + buf1len, buf2);
+    buf1len += buf2len;
+
+    ins_str(buf1, (size_t)buf1len);  // insert the new number
+    xfree(buf1);
+
     endpos = curwin->w_cursor;
     if (curwin->w_cursor.col) {
       curwin->w_cursor.col--;
@@ -4729,7 +4857,6 @@ bool do_addsub(int op_type, pos_T *pos, int length, linenr_T Prenum1)
   }
 
 theend:
-  xfree(buf1);
   if (visual) {
     curwin->w_cursor = save_cursor;
   } else if (did_change) {
@@ -5120,18 +5247,37 @@ static void str_to_reg(yankreg_T *y_ptr, MotionType yank_type, const char *str, 
   // Find the end of each line and save it into the array.
   if (str_list) {
     for (char **ss = (char **)str; *ss != NULL; ss++, lnum++) {
-      size_t ss_len = strlen(*ss);
-      pp[lnum] = cbuf_to_string(*ss, ss_len);
-      maxlen = MAX(maxlen, ss_len);
+      pp[lnum] = cstr_to_string(*ss);
+      if (yank_type == kMTBlockWise) {
+        size_t charlen = mb_string2cells(*ss);
+        maxlen = MAX(maxlen, charlen);
+      }
     }
   } else {
     size_t line_len;
     for (const char *start = str, *end = str + len;
          start < end + extraline;
          start += line_len + 1, lnum++) {
-      assert(end - start >= 0);
-      line_len = (size_t)((char *)xmemscan(start, '\n', (size_t)(end - start)) - start);
-      maxlen = MAX(maxlen, line_len);
+      int charlen = 0;
+
+      const char *line_end = start;
+      while (line_end < end) {  // find the end of the line
+        if (*line_end == '\n') {
+          break;
+        }
+        if (yank_type == kMTBlockWise) {
+          charlen += utf_ptr2cells_len(line_end, (int)(end - line_end));
+        }
+
+        if (*line_end == NUL) {
+          line_end++;  // registers can have NUL chars
+        } else {
+          line_end += utf_ptr2len_len(line_end, (int)(end - line_end));
+        }
+      }
+      assert(line_end - start >= 0);
+      line_len = (size_t)(line_end - start);
+      maxlen = MAX(maxlen, (size_t)charlen);
 
       // When appending, copy the previous line and free it after.
       size_t extra = append ? pp[--lnum].size : 0;
@@ -5139,7 +5285,9 @@ static void str_to_reg(yankreg_T *y_ptr, MotionType yank_type, const char *str, 
       if (extra > 0) {
         memcpy(s, pp[lnum].data, extra);
       }
-      memcpy(s + extra, start, line_len);
+      if (line_len > 0) {
+        memcpy(s + extra, start, line_len);
+      }
       size_t s_len = extra + line_len;
 
       if (append) {
@@ -6076,7 +6224,7 @@ void do_pending_operator(cmdarg_T *cap, int old_col, bool gui_yank)
     case OP_DELETE:
       VIsual_reselect = false;              // don't reselect now
       if (empty_region_error) {
-        vim_beep(BO_OPER);
+        vim_beep(kOptBoFlagOperator);
         CancelRedo();
       } else {
         op_delete(oap);
@@ -6092,7 +6240,7 @@ void do_pending_operator(cmdarg_T *cap, int old_col, bool gui_yank)
     case OP_YANK:
       if (empty_region_error) {
         if (!gui_yank) {
-          vim_beep(BO_OPER);
+          vim_beep(kOptBoFlagOperator);
           CancelRedo();
         }
       } else {
@@ -6106,7 +6254,7 @@ void do_pending_operator(cmdarg_T *cap, int old_col, bool gui_yank)
     case OP_CHANGE:
       VIsual_reselect = false;              // don't reselect now
       if (empty_region_error) {
-        vim_beep(BO_OPER);
+        vim_beep(kOptBoFlagOperator);
         CancelRedo();
       } else {
         // This is a new edit command, not a restart.  Need to
@@ -6169,7 +6317,7 @@ void do_pending_operator(cmdarg_T *cap, int old_col, bool gui_yank)
     case OP_LOWER:
     case OP_ROT13:
       if (empty_region_error) {
-        vim_beep(BO_OPER);
+        vim_beep(kOptBoFlagOperator);
         CancelRedo();
       } else {
         op_tilde(oap);
@@ -6211,7 +6359,7 @@ void do_pending_operator(cmdarg_T *cap, int old_col, bool gui_yank)
     case OP_APPEND:
       VIsual_reselect = false;          // don't reselect now
       if (empty_region_error) {
-        vim_beep(BO_OPER);
+        vim_beep(kOptBoFlagOperator);
         CancelRedo();
       } else {
         // This is a new edit command, not a restart.  Need to
@@ -6246,7 +6394,7 @@ void do_pending_operator(cmdarg_T *cap, int old_col, bool gui_yank)
     case OP_REPLACE:
       VIsual_reselect = false;          // don't reselect now
       if (empty_region_error) {
-        vim_beep(BO_OPER);
+        vim_beep(kOptBoFlagOperator);
         CancelRedo();
       } else {
         // Restore linebreak, so that when the user edits it looks as before.
@@ -6284,7 +6432,7 @@ void do_pending_operator(cmdarg_T *cap, int old_col, bool gui_yank)
     case OP_NR_ADD:
     case OP_NR_SUB:
       if (empty_region_error) {
-        vim_beep(BO_OPER);
+        vim_beep(kOptBoFlagOperator);
         CancelRedo();
       } else {
         VIsual_active = true;
@@ -6344,7 +6492,7 @@ static yankreg_T *adjust_clipboard_name(int *name, bool quiet, bool writing)
 
   yankreg_T *target = NULL;
   bool explicit_cb_reg = (*name == '*' || *name == '+');
-  bool implicit_cb_reg = (*name == NUL) && (cb_flags & CB_UNNAMEDMASK);
+  bool implicit_cb_reg = (*name == NUL) && (cb_flags & (kOptCbFlagUnnamed | kOptCbFlagUnnamedplus));
   if (!explicit_cb_reg && !implicit_cb_reg) {
     goto end;
   }
@@ -6363,7 +6511,7 @@ static yankreg_T *adjust_clipboard_name(int *name, bool quiet, bool writing)
 
   if (explicit_cb_reg) {
     target = &y_regs[*name == '*' ? STAR_REGISTER : PLUS_REGISTER];
-    if (writing && (cb_flags & (*name == '*' ? CB_UNNAMED : CB_UNNAMEDPLUS))) {
+    if (writing && (cb_flags & (*name == '*' ? kOptCbFlagUnnamed : kOptCbFlagUnnamedplus))) {
       clipboard_needs_update = false;
     }
     goto end;
@@ -6377,8 +6525,8 @@ static yankreg_T *adjust_clipboard_name(int *name, bool quiet, bool writing)
       goto end;
     }
 
-    if (cb_flags & CB_UNNAMEDPLUS) {
-      *name = (cb_flags & CB_UNNAMED && writing) ? '"' : '+';
+    if (cb_flags & kOptCbFlagUnnamedplus) {
+      *name = (cb_flags & kOptCbFlagUnnamed && writing) ? '"' : '+';
       target = &y_regs[PLUS_REGISTER];
     } else {
       *name = '*';

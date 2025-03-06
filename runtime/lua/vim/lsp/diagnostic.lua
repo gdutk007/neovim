@@ -5,7 +5,7 @@ local api = vim.api
 
 local M = {}
 
-local augroup = api.nvim_create_augroup('vim_lsp_diagnostic', {})
+local augroup = api.nvim_create_augroup('nvim.lsp.diagnostic', {})
 
 local DEFAULT_CLIENT_ID = -1
 
@@ -20,7 +20,7 @@ end
 ---@return lsp.DiagnosticSeverity
 local function severity_vim_to_lsp(severity)
   if type(severity) == 'string' then
-    severity = vim.diagnostic.severity[severity]
+    severity = vim.diagnostic.severity[severity] --- @type integer
   end
   return severity
 end
@@ -77,7 +77,7 @@ end
 local function diagnostic_lsp_to_vim(diagnostics, bufnr, client_id)
   local buf_lines = get_buf_lines(bufnr)
   local client = vim.lsp.get_client_by_id(client_id)
-  local offset_encoding = client and client.offset_encoding or 'utf-16'
+  local position_encoding = client and client.offset_encoding or 'utf-16'
   --- @param diagnostic lsp.Diagnostic
   --- @return vim.Diagnostic
   return vim.tbl_map(function(diagnostic)
@@ -89,15 +89,16 @@ local function diagnostic_lsp_to_vim(diagnostics, bufnr, client_id)
         string.format('Unsupported Markup message from LSP client %d', client_id),
         vim.lsp.log_levels.ERROR
       )
+      --- @diagnostic disable-next-line: undefined-field,no-unknown
       message = diagnostic.message.value
     end
     local line = buf_lines and buf_lines[start.line + 1] or ''
     --- @type vim.Diagnostic
     return {
       lnum = start.line,
-      col = vim.str_byteindex(line, offset_encoding, start.character, false),
+      col = vim.str_byteindex(line, position_encoding, start.character, false),
       end_lnum = _end.line,
-      end_col = vim.str_byteindex(line, offset_encoding, _end.character, false),
+      end_col = vim.str_byteindex(line, position_encoding, _end.character, false),
       severity = severity_lsp_to_vim(diagnostic.severity),
       message = message,
       source = diagnostic.source,
@@ -208,7 +209,7 @@ end
 
 --- @param uri string
 --- @param client_id? integer
---- @param diagnostics vim.Diagnostic[]
+--- @param diagnostics lsp.Diagnostic[]
 --- @param is_pull boolean
 local function handle_diagnostics(uri, client_id, diagnostics, is_pull)
   local fname = vim.uri_to_fname(uri)
@@ -246,10 +247,18 @@ end
 ---
 --- See |vim.diagnostic.config()| for configuration options.
 ---
----@param _ lsp.ResponseError?
+---@param error lsp.ResponseError?
 ---@param result lsp.DocumentDiagnosticReport
 ---@param ctx lsp.HandlerContext
-function M.on_diagnostic(_, result, ctx)
+function M.on_diagnostic(error, result, ctx)
+  if error ~= nil and error.code == protocol.ErrorCodes.ServerCancelled then
+    if error.data == nil or error.data.retriggerRequest ~= false then
+      local client = assert(vim.lsp.get_client_by_id(ctx.client_id))
+      client:request(ctx.method, ctx.params)
+    end
+    return
+  end
+
   if result == nil or result.kind == 'unchanged' then
     return
   end
@@ -348,9 +357,7 @@ end
 ---@param bufnr (integer) Buffer handle, or 0 for current
 ---@private
 function M._enable(bufnr)
-  if bufnr == nil or bufnr == 0 then
-    bufnr = api.nvim_get_current_buf()
-  end
+  bufnr = vim._resolve_bufnr(bufnr)
 
   if not bufstates[bufnr] then
     bufstates[bufnr] = { enabled = true }

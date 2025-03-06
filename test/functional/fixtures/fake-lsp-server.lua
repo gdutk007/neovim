@@ -386,6 +386,21 @@ function tests.check_forward_content_modified()
   }
 end
 
+function tests.check_forward_server_cancelled()
+  skeleton {
+    on_init = function()
+      return { capabilities = {} }
+    end,
+    body = function()
+      expect_request('error_code_test', function()
+        return { code = -32802 }, nil, { method = 'error_code_test', client_id = 1 }
+      end)
+      expect_notification('finish')
+      notify('finish')
+    end,
+  }
+end
+
 function tests.check_pending_request_tracked()
   skeleton {
     on_init = function(_)
@@ -774,15 +789,19 @@ function tests.code_action_with_resolve()
     end,
     body = function()
       notify('start')
-      local cmd = {
-        title = 'Command 1',
-        command = 'dummy1',
-      }
+      local cmd = { title = 'Action 1' }
       expect_request('textDocument/codeAction', function()
         return nil, { cmd }
       end)
       expect_request('codeAction/resolve', function()
-        return nil, cmd
+        return nil,
+          {
+            title = 'Action 1',
+            command = {
+              title = 'Command 1',
+              command = 'dummy1',
+            },
+          }
       end)
       notify('shutdown')
     end,

@@ -26,11 +26,10 @@ describe('Normal mode', function()
 
   it('&showcmd does not crash with :startinsert #28419', function()
     local screen = Screen.new(60, 17)
-    screen:attach()
-    fn.termopen(
-      { n.nvim_prog, '--clean', '--cmd', 'startinsert' },
-      { env = { VIMRUNTIME = os.getenv('VIMRUNTIME') } }
-    )
+    fn.jobstart({ n.nvim_prog, '--clean', '--cmd', 'startinsert' }, {
+      term = true,
+      env = { VIMRUNTIME = os.getenv('VIMRUNTIME') },
+    })
     screen:expect({
       grid = [[
         ^                                                            |
@@ -45,7 +44,6 @@ describe('Normal mode', function()
 
   it('replacing with ZWJ emoji sequences', function()
     local screen = Screen.new(30, 8)
-    screen:attach()
     api.nvim_buf_set_lines(0, 0, -1, true, { 'abcdefg' })
     feed('05r🧑‍🌾') -- ZWJ
     screen:expect([[

@@ -52,6 +52,7 @@
 #include "nvim/channel.h"
 #include "nvim/channel_defs.h"
 #include "nvim/cursor.h"
+#include "nvim/cursor_shape.h"
 #include "nvim/drawline.h"
 #include "nvim/drawscreen.h"
 #include "nvim/eval.h"
@@ -64,6 +65,7 @@
 #include "nvim/ex_docmd.h"
 #include "nvim/getchar.h"
 #include "nvim/globals.h"
+#include "nvim/grid.h"
 #include "nvim/highlight.h"
 #include "nvim/highlight_defs.h"
 #include "nvim/highlight_group.h"
@@ -91,17 +93,24 @@
 #include "nvim/types_defs.h"
 #include "nvim/ui.h"
 #include "nvim/vim_defs.h"
+#include "nvim/vterm/keyboard.h"
+#include "nvim/vterm/mouse.h"
+#include "nvim/vterm/parser.h"
+#include "nvim/vterm/pen.h"
+#include "nvim/vterm/screen.h"
+#include "nvim/vterm/state.h"
+#include "nvim/vterm/vterm.h"
+#include "nvim/vterm/vterm_keycodes_defs.h"
 #include "nvim/window.h"
-#include "vterm/vterm.h"
-#include "vterm/vterm_keycodes.h"
 
 typedef struct {
   VimState state;
   Terminal *term;
-  int save_rd;              // saved value of RedrawingDisabled
+  int save_rd;          ///< saved value of RedrawingDisabled
   bool close;
-  bool got_bsl;             // if the last input was <C-\>
-  bool got_bsl_o;           // if left terminal mode with <c-\><c-o>
+  bool got_bsl;         ///< if the last input was <C-\>
+  bool got_bsl_o;       ///< if left terminal mode with <c-\><c-o>
+  bool cursor_visible;  ///< cursor's current visibility; ensures matched busy_start/stop UI events
 } TerminalState;
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
@@ -160,17 +169,25 @@ struct terminal {
   int invalid_start, invalid_end;   // invalid rows in libvterm screen
   struct {
     int row, col;
+    int shape;
     bool visible;
+    bool blink;
   } cursor;
-  bool pending_resize;              // pending width/height
+
+  struct {
+    bool resize;          ///< pending width/height
+    bool cursor;          ///< pending cursor shape or blink change
+    StringBuilder *send;  ///< When there is a pending TermRequest autocommand, block and store input.
+  } pending;
+
+  bool theme_updates;  ///< Send a theme update notification when 'bg' changes
 
   bool color_set[16];
 
-  // When there is a pending TermRequest autocommand, block and store input.
-  StringBuilder *pending_send;
+  char *selection_buffer;  ///< libvterm selection buffer
+  StringBuilder selection;  ///< Growable array containing full selection data
 
-  char *selection_buffer;  /// libvterm selection buffer
-  StringBuilder selection;  /// Growable array containing full selection data
+  StringBuilder termrequest_buffer;  ///< Growable array containing unfinished request sequence
 
   size_t refcount;                  // reference count
 };
@@ -181,6 +198,7 @@ static VTermScreenCallbacks vterm_screen_callbacks = {
   .movecursor = term_movecursor,
   .settermprop = term_settermprop,
   .bell = term_bell,
+  .theme = term_theme,
   .sb_pushline = term_sb_push,  // Called before a line goes offscreen.
   .sb_popline = term_sb_pop,
 };
@@ -196,35 +214,58 @@ static Set(ptr_t) invalidated_terminals = SET_INIT;
 static void emit_termrequest(void **argv)
 {
   Terminal *term = argv[0];
-  char *payload = argv[1];
-  size_t payload_length = (size_t)argv[2];
+  char *sequence = argv[1];
+  size_t sequence_length = (size_t)argv[2];
   StringBuilder *pending_send = argv[3];
+  int row = (int)(intptr_t)argv[4];
+  int col = (int)(intptr_t)argv[5];
+
+  if (term->sb_pending > 0) {
+    // Don't emit the event while there is pending scrollback because we need
+    // the buffer contents to be fully updated. If this is the case, re-schedule
+    // the event.
+    multiqueue_put(main_loop.events, emit_termrequest, term, sequence, (void *)sequence_length,
+                   pending_send, (void *)(intptr_t)row, (void *)(intptr_t)col);
+    return;
+  }
+
+  set_vim_var_string(VV_TERMREQUEST, sequence, (ptrdiff_t)sequence_length);
+
+  MAXSIZE_TEMP_ARRAY(cursor, 2);
+  ADD_C(cursor, INTEGER_OBJ(row));
+  ADD_C(cursor, INTEGER_OBJ(col));
+
+  MAXSIZE_TEMP_DICT(data, 2);
+  String termrequest = { .data = sequence, .size = sequence_length };
+  PUT_C(data, "sequence", STRING_OBJ(termrequest));
+  PUT_C(data, "cursor", ARRAY_OBJ(cursor));
 
   buf_T *buf = handle_get_buffer(term->buf_handle);
-  String termrequest = { .data = payload, .size = payload_length };
-  Object data = STRING_OBJ(termrequest);
-  set_vim_var_string(VV_TERMREQUEST, payload, (ptrdiff_t)payload_length);
-  apply_autocmds_group(EVENT_TERMREQUEST, NULL, NULL, false, AUGROUP_ALL, buf, NULL, &data);
-  xfree(payload);
+  apply_autocmds_group(EVENT_TERMREQUEST, NULL, NULL, false, AUGROUP_ALL, buf, NULL,
+                       &DICT_OBJ(data));
+  xfree(sequence);
 
-  StringBuilder *term_pending_send = term->pending_send;
-  term->pending_send = NULL;
+  StringBuilder *term_pending_send = term->pending.send;
+  term->pending.send = NULL;
   if (kv_size(*pending_send)) {
     terminal_send(term, pending_send->items, pending_send->size);
     kv_destroy(*pending_send);
   }
   if (term_pending_send != pending_send) {
-    term->pending_send = term_pending_send;
+    term->pending.send = term_pending_send;
   }
   xfree(pending_send);
 }
 
-static void schedule_termrequest(Terminal *term, char *payload, size_t payload_length)
+static void schedule_termrequest(Terminal *term, char *sequence, size_t sequence_length)
 {
-  term->pending_send = xmalloc(sizeof(StringBuilder));
-  kv_init(*term->pending_send);
-  multiqueue_put(main_loop.events, emit_termrequest, term, payload, (void *)payload_length,
-                 term->pending_send);
+  term->pending.send = xmalloc(sizeof(StringBuilder));
+  kv_init(*term->pending.send);
+
+  int line = row_to_linenr(term, term->cursor.row);
+  multiqueue_put(main_loop.events, emit_termrequest, term, sequence, (void *)sequence_length,
+                 term->pending.send, (void *)(intptr_t)line,
+                 (void *)(intptr_t)term->cursor.col);
 }
 
 static int parse_osc8(VTermStringFragment frag, int *attr)
@@ -292,15 +333,22 @@ static int on_osc(int command, VTermStringFragment frag, void *user)
     return 1;
   }
 
-  StringBuilder request = KV_INITIAL_VALUE;
-  kv_printf(request, "\x1b]%d;", command);
-  kv_concat_len(request, frag.str, frag.len);
-  schedule_termrequest(term, request.items, request.size);
+  if (frag.initial) {
+    kv_size(term->termrequest_buffer) = 0;
+    kv_printf(term->termrequest_buffer, "\x1b]%d;", command);
+  }
+  kv_concat_len(term->termrequest_buffer, frag.str, frag.len);
+  if (frag.final) {
+    char *sequence = xmemdup(term->termrequest_buffer.items, term->termrequest_buffer.size);
+    schedule_termrequest(user, sequence, term->termrequest_buffer.size);
+  }
   return 1;
 }
 
 static int on_dcs(const char *command, size_t commandlen, VTermStringFragment frag, void *user)
 {
+  Terminal *term = user;
+
   if (command == NULL || frag.str == NULL) {
     return 0;
   }
@@ -308,10 +356,38 @@ static int on_dcs(const char *command, size_t commandlen, VTermStringFragment fr
     return 1;
   }
 
-  StringBuilder request = KV_INITIAL_VALUE;
-  kv_printf(request, "\x1bP%*s", (int)commandlen, command);
-  kv_concat_len(request, frag.str, frag.len);
-  schedule_termrequest(user, request.items, request.size);
+  if (frag.initial) {
+    kv_size(term->termrequest_buffer) = 0;
+    kv_printf(term->termrequest_buffer, "\x1bP%*s", (int)commandlen, command);
+  }
+  kv_concat_len(term->termrequest_buffer, frag.str, frag.len);
+  if (frag.final) {
+    char *sequence = xmemdup(term->termrequest_buffer.items, term->termrequest_buffer.size);
+    schedule_termrequest(user, sequence, term->termrequest_buffer.size);
+  }
+  return 1;
+}
+
+static int on_apc(VTermStringFragment frag, void *user)
+{
+  Terminal *term = user;
+  if (frag.str == NULL || frag.len == 0) {
+    return 0;
+  }
+
+  if (!has_event(EVENT_TERMREQUEST)) {
+    return 1;
+  }
+
+  if (frag.initial) {
+    kv_size(term->termrequest_buffer) = 0;
+    kv_printf(term->termrequest_buffer, "\x1b_");
+  }
+  kv_concat_len(term->termrequest_buffer, frag.str, frag.len);
+  if (frag.final) {
+    char *sequence = xmemdup(term->termrequest_buffer.items, term->termrequest_buffer.size);
+    schedule_termrequest(user, sequence, term->termrequest_buffer.size);
+  }
   return 1;
 }
 
@@ -320,7 +396,7 @@ static VTermStateFallbacks vterm_fallbacks = {
   .csi = NULL,
   .osc = on_osc,
   .dcs = on_dcs,
-  .apc = NULL,
+  .apc = on_apc,
   .pm = NULL,
   .sos = NULL,
 };
@@ -352,7 +428,7 @@ static void term_output_callback(const char *s, size_t len, void *user_data)
 
 /// Initializes terminal properties, and triggers TermOpen.
 ///
-/// The PTY process (TerminalOptions.data) was already started by termopen(),
+/// The PTY process (TerminalOptions.data) was already started by jobstart(),
 /// via ex_terminal() or the term:// BufReadCmd.
 ///
 /// @param buf Buffer used for presentation of the terminal.
@@ -363,7 +439,7 @@ void terminal_open(Terminal **termpp, buf_T *buf, TerminalOptions opts)
   // Create a new terminal instance and configure it
   Terminal *term = *termpp = xcalloc(1, sizeof(Terminal));
   term->opts = opts;
-  term->cursor.visible = true;
+
   // Associate the terminal instance with the new buffer
   term->buf_handle = buf->handle;
   buf->terminal = term;
@@ -386,6 +462,28 @@ void terminal_open(Terminal **termpp, buf_T *buf, TerminalOptions opts)
   term->selection_buffer = xcalloc(SELECTIONBUF_SIZE, 1);
   vterm_state_set_selection_callbacks(state, &vterm_selection_callbacks, term,
                                       term->selection_buffer, SELECTIONBUF_SIZE);
+
+  VTermValue cursor_shape;
+  switch (shape_table[SHAPE_IDX_TERM].shape) {
+  case SHAPE_BLOCK:
+    cursor_shape.number = VTERM_PROP_CURSORSHAPE_BLOCK;
+    break;
+  case SHAPE_HOR:
+    cursor_shape.number = VTERM_PROP_CURSORSHAPE_UNDERLINE;
+    break;
+  case SHAPE_VER:
+    cursor_shape.number = VTERM_PROP_CURSORSHAPE_BAR_LEFT;
+    break;
+  }
+  vterm_state_set_termprop(state, VTERM_PROP_CURSORSHAPE, &cursor_shape);
+
+  VTermValue cursor_blink;
+  if (shape_table[SHAPE_IDX_TERM].blinkon != 0 && shape_table[SHAPE_IDX_TERM].blinkoff != 0) {
+    cursor_blink.boolean = true;
+  } else {
+    cursor_blink.boolean = false;
+  }
+  vterm_state_set_termprop(state, VTERM_PROP_CURSORBLINK, &cursor_blink);
 
   // force a initial refresh of the screen to ensure the buffer will always
   // have as many lines as screen rows when refresh_scrollback is called
@@ -565,7 +663,7 @@ void terminal_check_size(Terminal *term)
 
   vterm_set_size(term->vt, height, width);
   vterm_screen_flush_damage(term->vts);
-  term->pending_resize = true;
+  term->pending.resize = true;
   invalidate_terminal(term, -1, -1);
 }
 
@@ -576,6 +674,7 @@ bool terminal_enter(void)
   assert(buf->terminal);  // Should only be called when curbuf has a terminal.
   TerminalState s[1] = { 0 };
   s->term = buf->terminal;
+  s->cursor_visible = true;  // Assume visible; may change via refresh_cursor later.
   stop_insert_mode = false;
 
   // Ensure the terminal is properly sized. Ideally window size management
@@ -598,12 +697,12 @@ bool terminal_enter(void)
   int save_w_p_cuc = curwin->w_p_cuc;
   OptInt save_w_p_so = curwin->w_p_so;
   OptInt save_w_p_siso = curwin->w_p_siso;
-  if (curwin->w_p_cul && curwin->w_p_culopt_flags & CULOPT_NBR) {
+  if (curwin->w_p_cul && curwin->w_p_culopt_flags & kOptCuloptFlagNumber) {
     if (strcmp(curwin->w_p_culopt, "number") != 0) {
       save_w_p_culopt = curwin->w_p_culopt;
       curwin->w_p_culopt = xstrdup("number");
     }
-    curwin->w_p_culopt_flags = CULOPT_NBR;
+    curwin->w_p_culopt_flags = kOptCuloptFlagNumber;
   } else {
     curwin->w_p_cul = false;
   }
@@ -614,14 +713,17 @@ bool terminal_enter(void)
   curwin->w_p_so = 0;
   curwin->w_p_siso = 0;
 
+  s->term->pending.cursor = true;  // Update the cursor shape table
   adjust_topline(s->term, buf, 0);  // scroll to end
-  // erase the unfocused cursor
-  invalidate_terminal(s->term, s->term->cursor.row, s->term->cursor.row + 1);
   showmode();
   curwin->w_redr_status = true;  // For mode() in statusline. #8323
-  ui_busy_start();
+  redraw_custom_title_later();
+  ui_cursor_shape();
   apply_autocmds(EVENT_TERMENTER, NULL, NULL, false, curbuf);
   may_trigger_modechanged();
+
+  // Tell the terminal it has focus
+  terminal_focus(s->term, true);
 
   s->state.execute = terminal_execute;
   s->state.check = terminal_check;
@@ -632,7 +734,15 @@ bool terminal_enter(void)
   }
   State = save_state;
   RedrawingDisabled = s->save_rd;
+  if (!s->cursor_visible) {
+    // If cursor was hidden, show it again. Do so right after restoring State.
+    ui_busy_stop();
+  }
+
   apply_autocmds(EVENT_TERMLEAVE, NULL, NULL, false, curbuf);
+
+  // Restore the terminal cursor to what is set in 'guicursor'
+  (void)parse_shape_opt(SHAPE_CURSOR);
 
   if (save_curwin == curwin->handle) {  // Else: window was closed.
     curwin->w_p_cul = save_w_p_cul;
@@ -648,8 +758,9 @@ bool terminal_enter(void)
     free_string_option(save_w_p_culopt);
   }
 
-  // draw the unfocused cursor
-  invalidate_terminal(s->term, s->term->cursor.row, s->term->cursor.row + 1);
+  // Tell the terminal it lost focus
+  terminal_focus(s->term, false);
+
   if (curbuf->terminal == s->term && !s->close) {
     terminal_check_cursor();
   }
@@ -658,7 +769,7 @@ bool terminal_enter(void)
   } else {
     unshowmode(true);
   }
-  ui_busy_stop();
+  ui_cursor_shape();
   if (s->close) {
     bool wipe = s->term->buf_handle != 0;
     s->term->destroy = true;
@@ -689,10 +800,13 @@ static void terminal_check_cursor(void)
 //   0 if the main loop must exit
 static int terminal_check(VimState *state)
 {
+  TerminalState *const s = (TerminalState *)state;
+
   if (stop_insert_mode) {
     return 0;
   }
 
+  assert(s->term == curbuf->terminal);
   terminal_check_cursor();
   validate_cursor(curwin);
 
@@ -719,6 +833,7 @@ static int terminal_check(VimState *state)
   }
 
   setcursor();
+  refresh_cursor(s->term, &s->cursor_visible);
   ui_flush();
   return 1;
 }
@@ -728,21 +843,32 @@ static int terminal_execute(VimState *state, int key)
 {
   TerminalState *s = (TerminalState *)state;
 
-  switch (key) {
+  // Check for certain control keys like Ctrl-C and Ctrl-\. We still send the
+  // unmerged key and modifiers to the terminal.
+  int tmp_mod_mask = mod_mask;
+  int mod_key = merge_modifiers(key, &tmp_mod_mask);
+
+  switch (mod_key) {
   case K_LEFTMOUSE:
   case K_LEFTDRAG:
   case K_LEFTRELEASE:
-  case K_MOUSEMOVE:
   case K_MIDDLEMOUSE:
   case K_MIDDLEDRAG:
   case K_MIDDLERELEASE:
   case K_RIGHTMOUSE:
   case K_RIGHTDRAG:
   case K_RIGHTRELEASE:
+  case K_X1MOUSE:
+  case K_X1DRAG:
+  case K_X1RELEASE:
+  case K_X2MOUSE:
+  case K_X2DRAG:
+  case K_X2RELEASE:
   case K_MOUSEDOWN:
   case K_MOUSEUP:
   case K_MOUSELEFT:
   case K_MOUSERIGHT:
+  case K_MOUSEMOVE:
     if (send_mouse_event(s->term, key)) {
       return 0;
     }
@@ -786,13 +912,13 @@ static int terminal_execute(VimState *state, int key)
     FALLTHROUGH;
 
   default:
-    if (key == Ctrl_C) {
+    if (mod_key == Ctrl_C) {
       // terminal_enter() always sets `mapped_ctrl_c` to avoid `got_int`. 8eeda7169aa4
       // But `got_int` may be set elsewhere, e.g. by interrupt() or an autocommand,
       // so ensure that it is cleared.
       got_int = false;
     }
-    if (key == Ctrl_BSL && !s->got_bsl) {
+    if (mod_key == Ctrl_BSL && !s->got_bsl) {
       s->got_bsl = true;
       break;
     }
@@ -809,11 +935,10 @@ static int terminal_execute(VimState *state, int key)
     return 0;
   }
   if (s->term != curbuf->terminal) {
-    invalidate_terminal(s->term, s->term->cursor.row, s->term->cursor.row + 1);
-    invalidate_terminal(curbuf->terminal,
-                        curbuf->terminal->cursor.row,
-                        curbuf->terminal->cursor.row + 1);
+    // Active terminal buffer changed, flush terminal's cursor state to the UI
     s->term = curbuf->terminal;
+    s->term->pending.cursor = true;
+    invalidate_terminal(s->term, -1, -1);
   }
   return 1;
 }
@@ -845,6 +970,7 @@ void terminal_destroy(Terminal **termpp)
     xfree(term->title);
     xfree(term->selection_buffer);
     kv_destroy(term->selection);
+    kv_destroy(term->termrequest_buffer);
     vterm_free(term->vt);
     xfree(term);
     *termpp = NULL;  // coverity[dead-store]
@@ -856,8 +982,8 @@ static void terminal_send(Terminal *term, const char *data, size_t size)
   if (term->closed) {
     return;
   }
-  if (term->pending_send) {
-    kv_concat_len(*term->pending_send, data, size);
+  if (term->pending.send) {
+    kv_concat_len(*term->pending.send, data, size);
     return;
   }
   term->opts.write_cb(data, size, term->opts.data);
@@ -868,28 +994,28 @@ static bool is_filter_char(int c)
   unsigned flag = 0;
   switch (c) {
   case 0x08:
-    flag = TPF_BS;
+    flag = kOptTpfFlagBS;
     break;
   case 0x09:
-    flag = TPF_HT;
+    flag = kOptTpfFlagHT;
     break;
   case 0x0A:
   case 0x0D:
     break;
   case 0x0C:
-    flag = TPF_FF;
+    flag = kOptTpfFlagFF;
     break;
   case 0x1b:
-    flag = TPF_ESC;
+    flag = kOptTpfFlagESC;
     break;
   case 0x7F:
-    flag = TPF_DEL;
+    flag = kOptTpfFlagDEL;
     break;
   default:
     if (c < ' ') {
-      flag = TPF_C0;
+      flag = kOptTpfFlagC0;
     } else if (c >= 0x80 && c <= 0x9F) {
-      flag = TPF_C1;
+      flag = kOptTpfFlagC1;
     }
   }
   return !!(tpf_flags & flag);
@@ -946,9 +1072,9 @@ static void terminal_send_key(Terminal *term, int c)
     c = Ctrl_AT;
   }
 
-  VTermKey key = convert_key(c, &mod);
+  VTermKey key = convert_key(&c, &mod);
 
-  if (key) {
+  if (key != VTERM_KEY_NONE) {
     vterm_keyboard_key(term->vt, key, mod);
   } else if (!IS_SPECIAL(c)) {
     vterm_keyboard_unichar(term->vt, (uint32_t)c, mod);
@@ -1062,14 +1188,6 @@ void terminal_get_line_attributes(Terminal *term, win_T *wp, int linenr, int *te
       attr_id = hl_combine_attr(attr_id, cell.uri);
     }
 
-    if (term->cursor.visible && term->cursor.row == row
-        && term->cursor.col == col) {
-      attr_id = hl_combine_attr(attr_id,
-                                is_focused(term) && wp == curwin
-                                ? win_hl_attr(wp, HLF_TERM)
-                                : win_hl_attr(wp, HLF_TERMNC));
-    }
-
     term_attrs[col] = attr_id;
   }
 }
@@ -1082,6 +1200,31 @@ Buffer terminal_buf(const Terminal *term)
 bool terminal_running(const Terminal *term)
 {
   return !term->closed;
+}
+
+void terminal_notify_theme(Terminal *term, bool dark)
+  FUNC_ATTR_NONNULL_ALL
+{
+  if (!term->theme_updates) {
+    return;
+  }
+
+  char buf[10];
+  ssize_t ret = snprintf(buf, sizeof(buf), "\x1b[997;%cn", dark ? '1' : '2');
+  assert(ret > 0);
+  assert((size_t)ret <= sizeof(buf));
+  terminal_send(term, buf, (size_t)ret);
+}
+
+static void terminal_focus(const Terminal *term, bool focus)
+  FUNC_ATTR_NONNULL_ALL
+{
+  VTermState *state = vterm_obtain_state(term->vt);
+  if (focus) {
+    vterm_state_focus_in(state);
+  } else {
+    vterm_state_focus_out(state);
+  }
 }
 
 // }}}
@@ -1105,8 +1248,7 @@ static int term_movecursor(VTermPos new_pos, VTermPos old_pos, int visible, void
   Terminal *term = data;
   term->cursor.row = new_pos.row;
   term->cursor.col = new_pos.col;
-  invalidate_terminal(term, old_pos.row, old_pos.row + 1);
-  invalidate_terminal(term, new_pos.row, new_pos.row + 1);
+  invalidate_terminal(term, -1, -1);
   return 1;
 }
 
@@ -1135,7 +1277,7 @@ static int term_settermprop(VTermProp prop, VTermValue *val, void *data)
 
   case VTERM_PROP_CURSORVISIBLE:
     term->cursor.visible = val->boolean;
-    invalidate_terminal(term, term->cursor.row, term->cursor.row + 1);
+    invalidate_terminal(term, -1, -1);
     break;
 
   case VTERM_PROP_TITLE: {
@@ -1171,6 +1313,22 @@ static int term_settermprop(VTermProp prop, VTermValue *val, void *data)
     term->forward_mouse = (bool)val->number;
     break;
 
+  case VTERM_PROP_CURSORBLINK:
+    term->cursor.blink = val->boolean;
+    term->pending.cursor = true;
+    invalidate_terminal(term, -1, -1);
+    break;
+
+  case VTERM_PROP_CURSORSHAPE:
+    term->cursor.shape = val->number;
+    term->pending.cursor = true;
+    invalidate_terminal(term, -1, -1);
+    break;
+
+  case VTERM_PROP_THEMEUPDATES:
+    term->theme_updates = val->boolean;
+    break;
+
   default:
     return 0;
   }
@@ -1181,7 +1339,15 @@ static int term_settermprop(VTermProp prop, VTermValue *val, void *data)
 /// Called when the terminal wants to ring the system bell.
 static int term_bell(void *data)
 {
-  vim_beep(BO_TERM);
+  vim_beep(kOptBoFlagTerm);
+  return 1;
+}
+
+/// Called when the terminal wants to query the system theme.
+static int term_theme(bool *dark, void *data)
+  FUNC_ATTR_NONNULL_ALL
+{
+  *dark = (*p_bg == 'd');
   return 1;
 }
 
@@ -1266,7 +1432,7 @@ static int term_sb_pop(int cols, VTermScreenCell *cells, void *data)
   // copy to vterm state
   memcpy(cells, sbrow->cells, sizeof(cells[0]) * cols_to_copy);
   for (size_t col = cols_to_copy; col < (size_t)cols; col++) {
-    cells[col].chars[0] = 0;
+    cells[col].schar = 0;
     cells[col].width = 1;
   }
 
@@ -1327,19 +1493,23 @@ static int term_selection_set(VTermSelectionMask mask, VTermStringFragment frag,
 // }}}
 // input handling {{{
 
-static void convert_modifiers(int key, VTermModifier *statep)
+static void convert_modifiers(int *key, VTermModifier *statep)
 {
   if (mod_mask & MOD_MASK_SHIFT) {
     *statep |= VTERM_MOD_SHIFT;
   }
   if (mod_mask & MOD_MASK_CTRL) {
     *statep |= VTERM_MOD_CTRL;
+    if (!(mod_mask & MOD_MASK_SHIFT) && *key >= 'A' && *key <= 'Z') {
+      // vterm interprets CTRL+A as SHIFT+CTRL, change to CTRL+a
+      *key += ('a' - 'A');
+    }
   }
   if (mod_mask & MOD_MASK_ALT) {
     *statep |= VTERM_MOD_ALT;
   }
 
-  switch (key) {
+  switch (*key) {
   case K_S_TAB:
   case K_S_UP:
   case K_S_DOWN:
@@ -1371,11 +1541,11 @@ static void convert_modifiers(int key, VTermModifier *statep)
   }
 }
 
-static VTermKey convert_key(int key, VTermModifier *statep)
+static VTermKey convert_key(int *key, VTermModifier *statep)
 {
   convert_modifiers(key, statep);
 
-  switch (key) {
+  switch (*key) {
   case K_BS:
     return VTERM_KEY_BACKSPACE;
   case K_S_TAB:
@@ -1678,8 +1848,6 @@ static bool send_mouse_event(Terminal *term, int c)
       pressed = true; FALLTHROUGH;
     case K_LEFTRELEASE:
       button = 1; break;
-    case K_MOUSEMOVE:
-      button = 0; break;
     case K_MIDDLEDRAG:
     case K_MIDDLEMOUSE:
       pressed = true; FALLTHROUGH;
@@ -1690,6 +1858,16 @@ static bool send_mouse_event(Terminal *term, int c)
       pressed = true; FALLTHROUGH;
     case K_RIGHTRELEASE:
       button = 3; break;
+    case K_X1DRAG:
+    case K_X1MOUSE:
+      pressed = true; FALLTHROUGH;
+    case K_X1RELEASE:
+      button = 8; break;
+    case K_X2DRAG:
+    case K_X2MOUSE:
+      pressed = true; FALLTHROUGH;
+    case K_X2RELEASE:
+      button = 9; break;
     case K_MOUSEDOWN:
       pressed = true; button = 4; break;
     case K_MOUSEUP:
@@ -1698,12 +1876,14 @@ static bool send_mouse_event(Terminal *term, int c)
       pressed = true; button = 7; break;
     case K_MOUSERIGHT:
       pressed = true; button = 6; break;
+    case K_MOUSEMOVE:
+      button = 0; break;
     default:
       return false;
     }
 
     VTermModifier mod = VTERM_MOD_NONE;
-    convert_modifiers(c, &mod);
+    convert_modifiers(&c, &mod);
     mouse_action(term, button, row, col - offset, pressed, mod);
     return false;
   }
@@ -1776,12 +1956,8 @@ static void fetch_row(Terminal *term, int row, int end_col)
   while (col < end_col) {
     VTermScreenCell cell;
     fetch_cell(term, row, col, &cell);
-    if (cell.chars[0]) {
-      int cell_len = 0;
-      for (int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell.chars[i]; i++) {
-        cell_len += utf_char2bytes((int)cell.chars[i], ptr + cell_len);
-      }
-      ptr += cell_len;
+    if (cell.schar) {
+      schar_get_adv(&ptr, cell.schar);
       line_len = (size_t)(ptr - term->textbuf);
     } else {
       *ptr++ = ' ';
@@ -1802,7 +1978,7 @@ static bool fetch_cell(Terminal *term, int row, int col, VTermScreenCell *cell)
     } else {
       // fill the pointer with an empty cell
       *cell = (VTermScreenCell) {
-        .chars = { 0 },
+        .schar = 0,
         .width = 1,
       };
       return false;
@@ -1842,7 +2018,8 @@ static void refresh_terminal(Terminal *term)
   }
   linenr_T ml_before = buf->b_ml.ml_line_count;
 
-  // refresh_ functions assume the terminal buffer is current
+  // Some refresh_ functions assume the terminal buffer is current. Don't call refresh_cursor here,
+  // as we don't want a terminal that was possibly made temporarily current influencing the cursor.
   aco_save_T aco;
   aucmd_prepbuf(&aco, buf);
   refresh_size(term, buf);
@@ -1852,6 +2029,54 @@ static void refresh_terminal(Terminal *term)
 
   int ml_added = buf->b_ml.ml_line_count - ml_before;
   adjust_topline(term, buf, ml_added);
+}
+
+static void refresh_cursor(Terminal *term, bool *cursor_visible)
+  FUNC_ATTR_NONNULL_ALL
+{
+  if (!is_focused(term)) {
+    return;
+  }
+  if (term->cursor.visible != *cursor_visible) {
+    *cursor_visible = term->cursor.visible;
+    if (*cursor_visible) {
+      ui_busy_stop();
+    } else {
+      ui_busy_start();
+    }
+  }
+
+  if (!term->pending.cursor) {
+    return;
+  }
+  term->pending.cursor = false;
+
+  if (term->cursor.blink) {
+    // For the TUI, this value doesn't actually matter, as long as it's non-zero. The terminal
+    // emulator dictates the blink frequency, not the application.
+    // For GUIs we just pick an arbitrary value, for now.
+    shape_table[SHAPE_IDX_TERM].blinkon = 500;
+    shape_table[SHAPE_IDX_TERM].blinkoff = 500;
+  } else {
+    shape_table[SHAPE_IDX_TERM].blinkon = 0;
+    shape_table[SHAPE_IDX_TERM].blinkoff = 0;
+  }
+
+  switch (term->cursor.shape) {
+  case VTERM_PROP_CURSORSHAPE_BLOCK:
+    shape_table[SHAPE_IDX_TERM].shape = SHAPE_BLOCK;
+    break;
+  case VTERM_PROP_CURSORSHAPE_UNDERLINE:
+    shape_table[SHAPE_IDX_TERM].shape = SHAPE_HOR;
+    shape_table[SHAPE_IDX_TERM].percentage = 20;
+    break;
+  case VTERM_PROP_CURSORSHAPE_BAR_LEFT:
+    shape_table[SHAPE_IDX_TERM].shape = SHAPE_VER;
+    shape_table[SHAPE_IDX_TERM].percentage = 25;
+    break;
+  }
+
+  ui_mode_info_set();
 }
 
 /// Calls refresh_terminal() on all invalidated_terminals.
@@ -1874,11 +2099,11 @@ static void refresh_timer_cb(TimeWatcher *watcher, void *data)
 
 static void refresh_size(Terminal *term, buf_T *buf)
 {
-  if (!term->pending_resize || term->closed) {
+  if (!term->pending.resize || term->closed) {
     return;
   }
 
-  term->pending_resize = false;
+  term->pending.resize = false;
   int width, height;
   vterm_get_size(term->vt, &height, &width);
   term->invalid_start = 0;
@@ -1929,6 +2154,7 @@ static void adjust_scrollback(Terminal *term, buf_T *buf)
 // Refresh the scrollback of an invalidated terminal.
 static void refresh_scrollback(Terminal *term, buf_T *buf)
 {
+  assert(buf == curbuf);  // TODO(seandewar): remove this condition
   int width, height;
   vterm_get_size(term->vt, &height, &width);
 

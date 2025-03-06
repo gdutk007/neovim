@@ -18,7 +18,6 @@ describe('vim.hl.range', function()
     screen:add_extra_attr_ids({
       [100] = { foreground = Screen.colors.Blue, background = Screen.colors.Yellow, bold = true },
     })
-    screen:attach()
     api.nvim_set_option_value('list', true, {})
     api.nvim_set_option_value('listchars', 'eol:$', {})
     api.nvim_buf_set_lines(0, 0, -1, true, {
@@ -28,6 +27,14 @@ describe('vim.hl.range', function()
       '口口=口口',
       'zxcvbnm',
     })
+    screen:expect([[
+      ^asdfghjkl{1:$}                                                  |
+      «口=口»{1:$}                                                    |
+      qwertyuiop{1:$}                                                 |
+      口口=口口{1:$}                                                  |
+      zxcvbnm{1:$}                                                    |
+                                                                  |
+    ]])
   end)
 
   it('works with charwise selection', function()
@@ -105,6 +112,33 @@ describe('vim.hl.range', function()
                                                                   |
     ]])
   end)
+
+  it('removes highlight after given `timeout`', function()
+    local timeout = 300
+    exec_lua(function()
+      local ns = vim.api.nvim_create_namespace('')
+      vim.hl.range(0, ns, 'Search', { 0, 0 }, { 4, 0 }, { timeout = timeout })
+    end)
+    screen:expect({
+      grid = [[
+      {10:^asdfghjkl}{100:$}                                                  |
+      {10:«口=口»}{100:$}                                                    |
+      {10:qwertyuiop}{100:$}                                                 |
+      {10:口口=口口}{1:$}                                                  |
+      zxcvbnm{1:$}                                                    |
+                                                                  |
+    ]],
+      timeout = timeout / 3,
+    })
+    screen:expect([[
+      ^asdfghjkl{1:$}                                                  |
+      «口=口»{1:$}                                                    |
+      qwertyuiop{1:$}                                                 |
+      口口=口口{1:$}                                                  |
+      zxcvbnm{1:$}                                                    |
+                                                                  |
+    ]])
+  end)
 end)
 
 describe('vim.hl.on_yank', function()
@@ -145,11 +179,15 @@ describe('vim.hl.on_yank', function()
       vim.api.nvim_buf_set_mark(0, ']', 1, 1, {})
       vim.hl.on_yank({ timeout = math.huge, on_macro = true, event = { operator = 'y' } })
     end)
-    local ns = api.nvim_create_namespace('hlyank')
+    local ns = api.nvim_create_namespace('nvim.hlyank')
     local win = api.nvim_get_current_win()
     eq({ win }, api.nvim__ns_get(ns).wins)
     command('wincmd w')
     eq({ win }, api.nvim__ns_get(ns).wins)
+    -- Use a new vim.hl.range() call to cancel the previous timer
+    exec_lua(function()
+      vim.hl.range(0, ns, 'Search', { 0, 0 }, { 0, 0 }, { timeout = 0 })
+    end)
   end)
 
   it('removes old highlight if new one is created before old one times out', function()
@@ -159,7 +197,7 @@ describe('vim.hl.on_yank', function()
       vim.api.nvim_buf_set_mark(0, ']', 1, 1, {})
       vim.hl.on_yank({ timeout = math.huge, on_macro = true, event = { operator = 'y' } })
     end)
-    local ns = api.nvim_create_namespace('hlyank')
+    local ns = api.nvim_create_namespace('nvim.hlyank')
     eq(api.nvim_get_current_win(), api.nvim__ns_get(ns).wins[1])
     command('wincmd w')
     exec_lua(function()
@@ -171,5 +209,9 @@ describe('vim.hl.on_yank', function()
     eq({ win }, api.nvim__ns_get(ns).wins)
     command('wincmd w')
     eq({ win }, api.nvim__ns_get(ns).wins)
+    -- Use a new vim.hl.range() call to cancel the previous timer
+    exec_lua(function()
+      vim.hl.range(0, ns, 'Search', { 0, 0 }, { 0, 0 }, { timeout = 0 })
+    end)
   end)
 end)

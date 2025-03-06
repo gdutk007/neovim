@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <uv.h>
 
 #include "nvim/ascii_defs.h"
 #include "nvim/charset.h"
@@ -615,11 +616,7 @@ static void func_dump_profile(FILE *fd)
         }
         if (fp->uf_script_ctx.sc_sid != 0) {
           bool should_free;
-          const LastSet last_set = (LastSet){
-            .script_ctx = fp->uf_script_ctx,
-            .channel_id = 0,
-          };
-          char *p = get_scriptname(last_set, &should_free);
+          char *p = get_scriptname(fp->uf_script_ctx, &should_free);
           fprintf(fd, "    Defined: %s:%" PRIdLINENR "\n",
                   p, fp->uf_script_ctx.sc_lnum);
           if (should_free) {
@@ -956,7 +953,7 @@ void time_init(const char *fname, const char *proc_name)
   const size_t bufsize = 8192;  // Big enough for the entire --startuptime report.
   time_fd = fopen(fname, "a");
   if (time_fd == NULL) {
-    semsg(_(e_notopen), fname);
+    fprintf(stderr, _(e_notopen), fname);
     return;
   }
   startuptime_buf = xmalloc(sizeof(char) * (bufsize + 1));
@@ -968,8 +965,7 @@ void time_init(const char *fname, const char *proc_name)
     XFREE_CLEAR(startuptime_buf);
     fclose(time_fd);
     time_fd = NULL;
-    ELOG("time_init: setvbuf failed: %d %s", r, uv_err_name(r));
-    semsg("time_init: setvbuf failed: %d %s", r, uv_err_name(r));
+    fprintf(stderr, "time_init: setvbuf failed: %d %s", r, uv_err_name(r));
     return;
   }
   fprintf(time_fd, "--- Startup times for process: %s ---\n", proc_name);

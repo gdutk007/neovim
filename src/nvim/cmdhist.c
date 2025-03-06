@@ -13,6 +13,7 @@
 #include "nvim/cmdhist.h"
 #include "nvim/errors.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/typval_defs.h"
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_getln.h"
@@ -667,7 +668,7 @@ void ex_history(exarg_T *eap)
           } else {
             xstrlcpy(IObuff + len, hist[i].hisstr, (size_t)(IOSIZE - len));
           }
-          msg_outtrans(IObuff, 0);
+          msg_outtrans(IObuff, 0, false);
         }
         if (i == idx) {
           break;

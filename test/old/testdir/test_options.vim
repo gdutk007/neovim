@@ -496,7 +496,7 @@ func Test_set_completion_string_values()
   " but don't exhaustively validate their results.
   call assert_equal('single', getcompletion('set ambw=', 'cmdline')[0])
   call assert_match('light\|dark', getcompletion('set bg=', 'cmdline')[1])
-  call assert_equal('indent', getcompletion('set backspace=', 'cmdline')[0])
+  call assert_equal('indent,eol,start', getcompletion('set backspace=', 'cmdline')[0])
   call assert_equal('yes', getcompletion('set backupcopy=', 'cmdline')[1])
   call assert_equal('backspace', getcompletion('set belloff=', 'cmdline')[1])
   call assert_equal('min:', getcompletion('set briopt=', 'cmdline')[1])
@@ -504,7 +504,8 @@ func Test_set_completion_string_values()
     call assert_equal('current', getcompletion('set browsedir=', 'cmdline')[1])
   endif
   call assert_equal('unload', getcompletion('set bufhidden=', 'cmdline')[1])
-  call assert_equal('nowrite', getcompletion('set buftype=', 'cmdline')[1])
+  "call assert_equal('nowrite', getcompletion('set buftype=', 'cmdline')[1])
+  call assert_equal('help', getcompletion('set buftype=', 'cmdline')[1])
   call assert_equal('internal', getcompletion('set casemap=', 'cmdline')[1])
   if exists('+clipboard')
     " call assert_match('unnamed', getcompletion('set clipboard=', 'cmdline')[1])
@@ -588,6 +589,7 @@ func Test_set_completion_string_values()
 
   " Other string options that queries the system rather than fixed enum names
   call assert_equal(['all', 'BufAdd'], getcompletion('set eventignore=', 'cmdline')[0:1])
+  call assert_equal(['WinLeave', 'WinResized', 'WinScrolled'], getcompletion('set eiw=', 'cmdline')[-3:-1])
   call assert_equal('latin1', getcompletion('set fileencodings=', 'cmdline')[1])
   " call assert_equal('top', getcompletion('set printoptions=', 'cmdline')[0])
   " call assert_equal('SpecialKey', getcompletion('set wincolor=', 'cmdline')[0])
@@ -643,6 +645,10 @@ func Test_set_completion_string_values()
   " Test completion in middle of the line
   " call feedkeys(":set hl=8b i\<Left>\<Left>\<Tab>\<C-B>\"\<CR>", 'xt')
   " call assert_equal("\"set hl=8bi i", @:)
+
+  " messagesopt
+  call assert_equal(['history:', 'hit-enter', 'wait:'],
+        \ getcompletion('set messagesopt+=', 'cmdline')->sort())
 
   "
   " Test flag lists
@@ -706,6 +712,10 @@ func Test_set_completion_string_values()
   " Test empty option
   set diffopt=
   call assert_equal([], getcompletion('set diffopt-=', 'cmdline'))
+  " Test all possible values
+  call assert_equal(['filler', 'context:', 'iblank', 'icase', 'iwhite', 'iwhiteall', 'iwhiteeol', 'horizontal',
+        \ 'vertical', 'closeoff', 'hiddenoff', 'foldcolumn:', 'followwrap', 'internal', 'indent-heuristic', 'algorithm:', 'linematch:'],
+        \ getcompletion('set diffopt=', 'cmdline'))
   set diffopt&
 
   " Test escaping output
@@ -2250,16 +2260,57 @@ func Test_opt_default()
   call assert_equal('vt', &formatoptions)
   set formatoptions&vim
   call assert_equal('tcq', &formatoptions)
+
+  call assert_equal('ucs-bom,utf-8,default,latin1', &fencs)
+  set fencs=latin1
+  set fencs&
+  call assert_equal('ucs-bom,utf-8,default,latin1', &fencs)
+  set fencs=latin1
+  set all&
+  call assert_equal('ucs-bom,utf-8,default,latin1', &fencs)
 endfunc
 
 " Test for the 'cmdheight' option
-func Test_cmdheight()
+func Test_opt_cmdheight()
   %bw!
   let ht = &lines
   set cmdheight=9999
   call assert_equal(1, winheight(0))
   call assert_equal(ht - 1, &cmdheight)
   set cmdheight&
+
+  " The status line should be taken into account.
+  set laststatus=2
+  set cmdheight=9999
+  call assert_equal(ht - 2, &cmdheight)
+  set cmdheight& laststatus=1  " Accommodate Nvim default
+
+  " The tabline should be taken into account only non-GUI.
+  set showtabline=2
+  set cmdheight=9999
+  if has('gui_running')
+    call assert_equal(ht - 1, &cmdheight)
+  else
+    call assert_equal(ht - 2, &cmdheight)
+  endif
+  set cmdheight& showtabline&
+
+  " The 'winminheight' should be taken into account.
+  set winheight=3 winminheight=3
+  split
+  set cmdheight=9999
+  call assert_equal(ht - 8, &cmdheight)
+  %bw!
+  set cmdheight& winminheight& winheight&
+
+  " Only the windows in the current tabpage are taken into account.
+  set winheight=3 winminheight=3 showtabline=0
+  split
+  tabnew
+  set cmdheight=9999
+  call assert_equal(ht - 3, &cmdheight)
+  %bw!
+  set cmdheight& winminheight& winheight& showtabline&
 endfunc
 
 " To specify a control character as an option value, '^' can be used
@@ -2456,6 +2507,7 @@ func Test_string_option_revert_on_failure()
         \ ['eadirection', 'hor', 'a123'],
         \ ['encoding', 'utf-8', 'a123'],
         \ ['eventignore', 'TextYankPost', 'a123'],
+        \ ['eventignorewin', 'WinScrolled', 'a123'],
         \ ['fileencoding', 'utf-8', 'a123,'],
         \ ['fileformat', 'mac', 'a123'],
         \ ['fileformats', 'mac', 'a123'],
@@ -2474,6 +2526,7 @@ func Test_string_option_revert_on_failure()
         \ ['lispoptions', 'expr:1', 'a123'],
         \ ['listchars', 'tab:->', 'tab:'],
         \ ['matchpairs', '<:>', '<:'],
+        \ ['messagesopt', 'hit-enter,history:100', 'a123'],
         \ ['mkspellmem', '100000,1000,100', '100000'],
         \ ['mouse', 'nvi', 'z'],
         \ ['mousemodel', 'extend', 'a123'],

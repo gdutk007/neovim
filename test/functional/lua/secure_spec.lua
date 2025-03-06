@@ -39,7 +39,6 @@ describe('vim.secure', function()
 
     it('works', function()
       local screen = Screen.new(80, 8)
-      screen:attach()
       screen:set_default_attr_ids({
         [1] = { bold = true, foreground = Screen.colors.Blue1 },
         [2] = { bold = true, reverse = true },
@@ -154,16 +153,16 @@ describe('vim.secure', function()
       feed('v')
       screen:expect {
         grid = [[
-          ^let g:foobar = 42                                                             |
-        {1:~                                                                               }|*2
-        {2:]]
+          ^let g:foobar = 42                                                               |
+          {1:~                                                                               }|*2
+          {2:]]
           .. fn.fnamemodify(cwd, ':~')
           .. pathsep
           .. [[Xfile [RO]{MATCH:%s+}}|
-                                                                                        |
-        {1:~                                                                               }|
-        {4:[No Name]                                                                       }|
-                                                                                        |
+                                                                                          |
+          {1:~                                                                               }|
+          {4:[No Name]                                                                       }|
+                                                                                          |
       ]],
       }
 

@@ -31,7 +31,6 @@ describe('edit', function()
   -- oldtest: Test_edit_insert_reg()
   it('inserting a register using CTRL-R', function()
     local screen = Screen.new(10, 6)
-    screen:attach()
     feed('a<C-R>')
     screen:expect([[
       {18:^"}           |
@@ -55,7 +54,6 @@ describe('edit', function()
   -- oldtest: Test_edit_ctrl_r_failed()
   it('positioning cursor after CTRL-R expression failed', function()
     local screen = Screen.new(60, 6)
-    screen:attach()
 
     feed('i<C-R>')
     screen:expect([[
@@ -92,6 +90,30 @@ describe('edit', function()
       ^:                                                           |
       {1:~                                                           }|*4
                                                                   |
+    ]])
+  end)
+
+  -- oldtest: Test_edit_CAR()
+  it('Enter inserts newline with pum at original text after adding leader', function()
+    local screen = Screen.new(10, 6)
+    command('set cot=menu,menuone,noselect')
+    feed('Shello hero<CR>h<C-X><C-N>e')
+    screen:expect([[
+      hello hero  |
+      he^          |
+      {4:hello       }|
+      {4:hero        }|
+      {1:~           }|
+      {5:--}          |
+    ]])
+
+    feed('<CR>')
+    screen:expect([[
+      hello hero  |
+      he          |
+      ^            |
+      {1:~           }|*2
+      {5:-- INSERT --}|
     ]])
   end)
 end)

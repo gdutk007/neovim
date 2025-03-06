@@ -70,7 +70,7 @@ typedef struct {
 // Mask to check for flags that prevent normal writing
 #define BF_WRITE_MASK   (BF_NOTEDITED + BF_NEW + BF_READERR)
 
-typedef struct wininfo_S wininfo_T;
+typedef struct wininfo_S WinInfo;
 typedef struct frame_S frame_T;
 typedef uint64_t disptick_T;  // display tick type
 
@@ -85,7 +85,7 @@ typedef struct {
 
 // Structure that contains all options that are local to a window.
 // Used twice in a window: for the current buffer and for all buffers.
-// Also used in wininfo_T.
+// Also used in WinInfo.
 typedef struct {
   int wo_arab;
 #define w_p_arab w_onebuf_opt.wo_arab  // 'arabic'
@@ -96,6 +96,8 @@ typedef struct {
   int wo_diff;
 #define w_p_diff w_onebuf_opt.wo_diff  // 'diff'
   char *wo_fdc;
+#define w_p_eiw w_onebuf_opt.wo_eiw  // 'eventignorewin'
+  char *wo_eiw;
 #define w_p_fdc w_onebuf_opt.wo_fdc    // 'foldcolumn'
   char *wo_fdc_save;
 #define w_p_fdc_save w_onebuf_opt.wo_fdc_save  // 'fdc' saved for diff mode
@@ -206,7 +208,7 @@ typedef struct {
   OptInt wo_winbl;
 #define w_p_winbl w_onebuf_opt.wo_winbl  // 'winblend'
 
-  LastSet wo_script_ctx[WV_COUNT];        // SCTXs for window-local options
+  sctx_T wo_script_ctx[kWinOptCount];  // SCTXs for window-local options
 #define w_p_script_ctx w_onebuf_opt.wo_script_ctx
 } winopt_T;
 
@@ -219,8 +221,6 @@ typedef struct {
 // The window-info is kept in a list at b_wininfo.  It is kept in
 // most-recently-used order.
 struct wininfo_S {
-  wininfo_T *wi_next;         // next entry or NULL for last entry
-  wininfo_T *wi_prev;         // previous entry or NULL for first entry
   win_T *wi_win;          // pointer to window that did set wi_mark
   fmark_T wi_mark;                // last cursor mark in the file
   bool wi_optset;               // true when wi_opt has useful values
@@ -316,8 +316,6 @@ typedef struct {
   char *b_p_spf;              // 'spellfile'
   char *b_p_spl;              // 'spelllang'
   char *b_p_spo;              // 'spelloptions'
-#define SPO_CAMEL  0x1
-#define SPO_NPBUFFER 0x2
   unsigned b_p_spo_flags;      // 'spelloptions' flags
   int b_cjk;                  // all CJK letters as OK
   uint8_t b_syn_chartab[32];  // syntax iskeyword option
@@ -413,10 +411,9 @@ struct file_buffer {
                                 // change
   linenr_T b_mod_xlines;        // number of extra buffer lines inserted;
                                 // negative when lines were deleted
-  wininfo_T *b_wininfo;         // list of last used info for each window
+  kvec_t(WinInfo *) b_wininfo;  // list of last used info for each window
   disptick_T b_mod_tick_syn;    // last display tick syntax was updated
-  disptick_T b_mod_tick_decor;  // last display tick decoration providers
-                                // where invoked
+  disptick_T b_mod_tick_decor;  // last display tick decoration providers were invoked
 
   int64_t b_mtime;              // last change time of original file
   int64_t b_mtime_ns;           // nanoseconds of last change time
@@ -512,7 +509,7 @@ struct file_buffer {
   // or contents of the file being edited.
   bool b_p_initialized;                 // set when options initialized
 
-  LastSet b_p_script_ctx[BV_COUNT];     // SCTXs for buffer-local options
+  sctx_T b_p_script_ctx[kBufOptCount];  // SCTXs for buffer-local options
 
   int b_p_ai;                   ///< 'autoindent'
   int b_p_ai_nopaste;           ///< b_p_ai saved for paste mode
@@ -815,6 +812,7 @@ typedef struct {
   uint16_t wl_size;             // height in screen lines
   char wl_valid;                // true values are valid for text in buffer
   char wl_folded;               // true when this is a range of folded lines
+  linenr_T wl_foldend;          // last buffer line number for folded line
   linenr_T wl_lastlnum;         // last buffer line number for logical line
 } wline_T;
 
@@ -904,6 +902,8 @@ typedef enum {
   kFloatRelativeWindow = 1,
   kFloatRelativeCursor = 2,
   kFloatRelativeMouse = 3,
+  kFloatRelativeTabline = 4,
+  kFloatRelativeLaststatus = 5,
 } FloatRelative;
 
 /// Keep in sync with win_split_str[] in nvim_win_get_config() (api/win_config.c)
@@ -1035,7 +1035,7 @@ struct window_S {
   synblock_T *w_s;                 ///< for :ownsyntax
 
   int w_ns_hl;
-  int w_ns_hl_winhl;
+  int w_ns_hl_winhl;  ///< when set to -1, 'winhighlight' shouldn't be used
   int w_ns_hl_active;
   int *w_ns_hl_attr;
 
@@ -1312,23 +1312,15 @@ struct window_S {
   linenr_T w_statuscol_line_count;      // line count when 'statuscolumn' width was computed.
   int w_nrwidth_width;                  // nr of chars to print line count.
 
-  qf_info_T *w_llist;                 // Location list for this window
+  qf_info_T *w_llist;                   // Location list for this window
   // Location list reference used in the location list window.
   // In a non-location list window, w_llist_ref is NULL.
   qf_info_T *w_llist_ref;
 
-  // Status line click definitions
-  StlClickDefinition *w_status_click_defs;
-  // Size of the w_status_click_defs array
-  size_t w_status_click_defs_size;
-
-  // Window bar click definitions
-  StlClickDefinition *w_winbar_click_defs;
-  // Size of the w_winbar_click_defs array
-  size_t w_winbar_click_defs_size;
-
-  // Status column click definitions
-  StlClickDefinition *w_statuscol_click_defs;
-  // Size of the w_statuscol_click_defs array
-  size_t w_statuscol_click_defs_size;
+  StlClickDefinition *w_status_click_defs;      // Status line click definitions
+  size_t w_status_click_defs_size;              // Size of the w_status_click_defs array
+  StlClickDefinition *w_winbar_click_defs;      // Window bar click definitions
+  size_t w_winbar_click_defs_size;              // Size of the w_winbar_click_defs array
+  StlClickDefinition *w_statuscol_click_defs;   // Status column click definitions
+  size_t w_statuscol_click_defs_size;           // Size of the w_statuscol_click_defs array
 };

@@ -31,7 +31,7 @@ target_link_libraries(main_lib INTERFACE ${LUV_LIBRARY})
 find_package(Iconv REQUIRED)
 find_package(Libuv 1.28.0 REQUIRED)
 find_package(Lpeg REQUIRED)
-find_package(Treesitter 0.24.0 REQUIRED)
+find_package(Treesitter 0.25.0 REQUIRED)
 find_package(Unibilium 2.0 REQUIRED)
 find_package(UTF8proc REQUIRED)
 
@@ -49,7 +49,7 @@ if(ENABLE_LIBINTL)
 endif()
 
 if(ENABLE_WASMTIME)
-  find_package(Wasmtime 25.0.2 EXACT REQUIRED)
+  find_package(Wasmtime 29.0.1 EXACT REQUIRED)
   target_link_libraries(main_lib INTERFACE wasmtime)
   target_compile_definitions(nvim_bin PRIVATE HAVE_WASMTIME)
 endif()
@@ -120,8 +120,8 @@ elseif(MINGW)
   # Use POSIX compatible stdio in Mingw
   target_compile_definitions(main_lib INTERFACE __USE_MINGW_ANSI_STDIO)
 
-  # Enable wmain
-  target_link_libraries(nvim_bin PRIVATE -municode)
+  # wrapper for nvim.manifest
+  target_sources(main_lib INTERFACE ${CMAKE_CURRENT_LIST_DIR}/os/nvim.rc)
 elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
   target_compile_options(main_lib INTERFACE
     -Wno-conversion
@@ -292,7 +292,7 @@ set(UI_METADATA ${PROJECT_BINARY_DIR}/ui_metadata.mpack)
 set(BINARY_LIB_DIR ${PROJECT_BINARY_DIR}/lib/nvim)
 set(GENERATED_DIR ${PROJECT_BINARY_DIR}/src/nvim/auto)
 set(GENERATED_INCLUDES_DIR ${PROJECT_BINARY_DIR}/include)
-set(GENERATOR_DIR ${CMAKE_CURRENT_LIST_DIR}/generators)
+set(GENERATOR_DIR ${PROJECT_SOURCE_DIR}/src/gen)
 set(GEN_EVAL_TOUCH ${TOUCHES_DIR}/gen_doc_eval)
 set(LUAJIT_RUNTIME_DIR ${DEPS_PREFIX}/share/luajit-2.1/jit)
 set(NVIM_RUNTIME_DIR ${PROJECT_SOURCE_DIR}/runtime)
@@ -306,9 +306,9 @@ set(EX_CMDS_GENERATOR ${GENERATOR_DIR}/gen_ex_cmds.lua)
 set(FUNCS_GENERATOR ${GENERATOR_DIR}/gen_eval.lua)
 set(GENERATOR_C_GRAMMAR ${GENERATOR_DIR}/c_grammar.lua)
 set(GENERATOR_HASHY ${GENERATOR_DIR}/hashy.lua)
-set(GENERATOR_PRELOAD ${GENERATOR_DIR}/preload.lua)
+set(GENERATOR_PRELOAD ${GENERATOR_DIR}/preload_nlua.lua)
+set(NVIM_LUA_PRELOAD ${GENERATOR_DIR}/preload.lua)
 set(HEADER_GENERATOR ${GENERATOR_DIR}/gen_declarations.lua)
-set(OPTIONS_ENUM_GENERATOR ${GENERATOR_DIR}/gen_options_enum.lua)
 set(OPTIONS_GENERATOR ${GENERATOR_DIR}/gen_options.lua)
 
 # GENERATED_DIR and GENERATED_INCLUDES_DIR
@@ -323,6 +323,7 @@ set(GENERATED_KEYSETS_DEFS ${GENERATED_DIR}/keysets_defs.generated.h)
 set(GENERATED_OPTIONS ${GENERATED_DIR}/options.generated.h)
 set(GENERATED_OPTIONS_ENUM ${GENERATED_DIR}/options_enum.generated.h)
 set(GENERATED_OPTIONS_MAP ${GENERATED_DIR}/options_map.generated.h)
+set(GENERATED_OPTION_VARS ${GENERATED_DIR}/option_vars.generated.h)
 set(GENERATED_UI_EVENTS_CALL ${GENERATED_DIR}/ui_events_call.generated.h)
 set(GENERATED_UI_EVENTS_CLIENT ${GENERATED_DIR}/ui_events_client.generated.h)
 set(GENERATED_UI_EVENTS_REMOTE ${GENERATED_DIR}/ui_events_remote.generated.h)
@@ -341,6 +342,7 @@ set(LUA_KEYMAP_MODULE_SOURCE ${NVIM_RUNTIME_DIR}/lua/vim/keymap.lua)
 set(LUA_LOADER_MODULE_SOURCE ${NVIM_RUNTIME_DIR}/lua/vim/loader.lua)
 set(LUA_OPTIONS_MODULE_SOURCE ${NVIM_RUNTIME_DIR}/lua/vim/_options.lua)
 set(LUA_SHARED_MODULE_SOURCE ${NVIM_RUNTIME_DIR}/lua/vim/shared.lua)
+set(LUA_TEXT_MODULE_SOURCE ${NVIM_RUNTIME_DIR}/lua/vim/text.lua)
 
 file(GLOB API_HEADERS CONFIGURE_DEPENDS api/*.h)
 list(REMOVE_ITEM API_HEADERS ${CMAKE_CURRENT_LIST_DIR}/api/ui_events.in.h)
@@ -361,8 +363,8 @@ file(MAKE_DIRECTORY ${TOUCHES_DIR} ${GENERATED_DIR} ${GENERATED_INCLUDES_DIR})
 
 file(GLOB NVIM_SOURCES CONFIGURE_DEPENDS *.c)
 file(GLOB NVIM_HEADERS CONFIGURE_DEPENDS *.h)
-file(GLOB EXTERNAL_SOURCES CONFIGURE_DEPENDS ../xdiff/*.c ../mpack/*.c ../cjson/*.c ../klib/*.c ../vterm/*.c)
-file(GLOB EXTERNAL_HEADERS CONFIGURE_DEPENDS ../xdiff/*.h ../mpack/*.h ../cjson/*.h ../klib/*.h ../vterm/*.h)
+file(GLOB EXTERNAL_SOURCES CONFIGURE_DEPENDS ../xdiff/*.c ../mpack/*.c ../cjson/*.c ../klib/*.c)
+file(GLOB EXTERNAL_HEADERS CONFIGURE_DEPENDS ../xdiff/*.h ../mpack/*.h ../cjson/*.h ../klib/*.h)
 
 file(GLOB NLUA0_SOURCES CONFIGURE_DEPENDS ../mpack/*.c)
 
@@ -391,6 +393,7 @@ foreach(subdir
         msgpack_rpc
         tui
         tui/termkey
+        vterm
         event
         eval
         lua
@@ -513,6 +516,9 @@ add_custom_command(
 set(LUA_GEN ${LUA_GEN_PRG} ${GENERATOR_PRELOAD} ${PROJECT_SOURCE_DIR} $<TARGET_FILE:nlua0> ${PROJECT_BINARY_DIR})
 set(LUA_GEN_DEPS ${GENERATOR_PRELOAD} $<TARGET_FILE:nlua0>)
 
+# Like LUA_GEN but includes also vim.fn, vim.api, vim.uv, etc
+set(NVIM_LUA $<TARGET_FILE:nvim_bin> -u NONE -l ${NVIM_LUA_PRELOAD} ${PROJECT_SOURCE_DIR})
+
 # NVIM_GENERATED_FOR_HEADERS: generated headers to be included in headers
 # NVIM_GENERATED_FOR_SOURCES: generated headers to be included in sources
 # These lists must be mutually exclusive.
@@ -556,7 +562,7 @@ foreach(sfile ${NVIM_SOURCES}
     set(PREPROC_OUTPUT -w -E -o ${gf_i})
   endif()
 
-  set(depends "${HEADER_GENERATOR}" "${sfile}" "${LUA_GEN_DEPS}")
+  set(depends "${HEADER_GENERATOR}" "${sfile}" "${LUA_GEN_DEPS}" "${GENERATOR_C_GRAMMAR}")
   if("${f}" STREQUAL "version.c")
     # Ensure auto/versiondef_git.h exists after "make clean".
     list(APPEND depends update_version_stamp "${NVIM_VERSION_GIT_H}" "${NVIM_VERSION_DEF_H}")
@@ -619,6 +625,7 @@ add_custom_command(
       ${LUA_DEFAULTS_MODULE_SOURCE} "vim._defaults"
       ${LUA_OPTIONS_MODULE_SOURCE} "vim._options"
       ${LUA_SHARED_MODULE_SOURCE} "vim.shared"
+      ${LUA_TEXT_MODULE_SOURCE} "vim.text"
   DEPENDS
     ${CHAR_BLOB_GENERATOR}
     ${LUA_INIT_PACKAGES_MODULE_SOURCE}
@@ -632,6 +639,7 @@ add_custom_command(
     ${LUA_DEFAULTS_MODULE_SOURCE}
     ${LUA_OPTIONS_MODULE_SOURCE}
     ${LUA_SHARED_MODULE_SOURCE}
+    ${LUA_TEXT_MODULE_SOURCE}
   VERBATIM
 )
 
@@ -658,6 +666,7 @@ list(APPEND NVIM_GENERATED_FOR_HEADERS
   "${GENERATED_EVENTS_ENUM}"
   "${GENERATED_KEYSETS_DEFS}"
   "${GENERATED_OPTIONS_ENUM}"
+  "${GENERATED_OPTION_VARS}"
 )
 
 list(APPEND NVIM_GENERATED_FOR_SOURCES
@@ -687,14 +696,9 @@ add_custom_command(OUTPUT ${GENERATED_EVENTS_ENUM} ${GENERATED_EVENTS_NAMES_MAP}
   DEPENDS ${LUA_GEN_DEPS} ${EVENTS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/auevents.lua
 )
 
-add_custom_command(OUTPUT ${GENERATED_OPTIONS}
-  COMMAND ${LUA_GEN} ${OPTIONS_GENERATOR} ${GENERATED_OPTIONS}
+add_custom_command(OUTPUT ${GENERATED_OPTIONS} ${GENERATED_OPTIONS_ENUM} ${GENERATED_OPTIONS_MAP} ${GENERATED_OPTION_VARS}
+  COMMAND ${LUA_GEN} ${OPTIONS_GENERATOR} ${GENERATED_OPTIONS} ${GENERATED_OPTIONS_ENUM} ${GENERATED_OPTIONS_MAP} ${GENERATED_OPTION_VARS}
   DEPENDS ${LUA_GEN_DEPS} ${OPTIONS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/options.lua
-)
-
-add_custom_command(OUTPUT ${GENERATED_OPTIONS_ENUM} ${GENERATED_OPTIONS_MAP}
-  COMMAND ${LUA_GEN} ${OPTIONS_ENUM_GENERATOR} ${GENERATED_OPTIONS_ENUM} ${GENERATED_OPTIONS_MAP}
-  DEPENDS ${LUA_GEN_DEPS} ${OPTIONS_ENUM_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/options.lua
 )
 
 # NVIM_GENERATED_FOR_SOURCES and NVIM_GENERATED_FOR_HEADERS must be mutually exclusive.
@@ -750,6 +754,7 @@ add_custom_target(nvim_runtime_deps)
 if(WIN32)
   # Copy DLLs and third-party tools to bin/ and install them along with nvim
   add_custom_command(TARGET nvim_runtime_deps
+    POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E ${COPY_DIRECTORY} ${PROJECT_BINARY_DIR}/windows_runtime_deps/
       ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
   install(DIRECTORY ${PROJECT_BINARY_DIR}/windows_runtime_deps/
@@ -772,8 +777,6 @@ if(WIN32)
   set(EXTERNAL_BLOBS_SCRIPT
     "file(MAKE_DIRECTORY \"${PROJECT_BINARY_DIR}/windows_runtime_deps/platforms\")")
   foreach(DEP_FILE IN ITEMS
-      cat.exe
-      tee.exe
       win32yank.exe
       xxd.exe)
   get_filename_component(DEP_FILE_DIR ${DEP_FILE} DIRECTORY)
@@ -791,7 +794,10 @@ file(MAKE_DIRECTORY ${BINARY_LIB_DIR})
 
 # install treesitter parser if bundled
 if(EXISTS ${DEPS_PREFIX}/lib/nvim/parser)
-  add_custom_command(TARGET nvim_runtime_deps COMMAND ${CMAKE_COMMAND} -E ${COPY_DIRECTORY} ${DEPS_PREFIX}/lib/nvim/parser ${BINARY_LIB_DIR}/parser)
+  add_custom_command(
+    TARGET nvim_runtime_deps
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E ${COPY_DIRECTORY} ${DEPS_PREFIX}/lib/nvim/parser ${BINARY_LIB_DIR}/parser)
 endif()
 
 install(DIRECTORY ${BINARY_LIB_DIR}
@@ -826,6 +832,7 @@ target_link_libraries(libnvim PRIVATE main_lib PUBLIC libuv)
 #-------------------------------------------------------------------------------
 
 find_program(CLANG_TIDY_PRG clang-tidy)
+mark_as_advanced(CLANG_TIDY_PRG)
 set(EXCLUDE_CLANG_TIDY typval_encode.c.h ui_events.in.h)
 if(WIN32)
   list(APPEND EXCLUDE_CLANG_TIDY
@@ -937,12 +944,12 @@ file(GLOB LUA_SOURCES CONFIGURE_DEPENDS
 )
 
 add_target(doc-vim
-  COMMAND $<TARGET_FILE:nvim_bin> -u NONE -l scripts/gen_vimdoc.lua
+  COMMAND ${NVIM_LUA} src/gen/gen_vimdoc.lua
   DEPENDS
     nvim
     ${API_SOURCES}
     ${LUA_SOURCES}
-    ${PROJECT_SOURCE_DIR}/scripts/gen_vimdoc.lua
+    ${PROJECT_SOURCE_DIR}/src/gen/gen_vimdoc.lua
     ${NVIM_RUNTIME_DIR}/doc/api.txt
     ${NVIM_RUNTIME_DIR}/doc/diagnostic.txt
     ${NVIM_RUNTIME_DIR}/doc/lsp.txt
@@ -951,11 +958,11 @@ add_target(doc-vim
   )
 
 add_target(doc-eval
-  COMMAND $<TARGET_FILE:nvim_bin> -u NONE -l ${PROJECT_SOURCE_DIR}/scripts/gen_eval_files.lua
+  COMMAND ${NVIM_LUA} ${PROJECT_SOURCE_DIR}/src/gen/gen_eval_files.lua
   DEPENDS
     nvim
     ${FUNCS_METADATA}
-    ${PROJECT_SOURCE_DIR}/scripts/gen_eval_files.lua
+    ${PROJECT_SOURCE_DIR}/src/gen/gen_eval_files.lua
     ${PROJECT_SOURCE_DIR}/src/nvim/eval.lua
     ${PROJECT_SOURCE_DIR}/src/nvim/options.lua
     ${PROJECT_SOURCE_DIR}/src/nvim/vvars.lua
@@ -966,7 +973,7 @@ add_custom_target(doc)
 add_dependencies(doc doc-vim doc-eval)
 
 add_target(lintdoc
-  COMMAND $<TARGET_FILE:nvim_bin> -u NONE -l scripts/lintdoc.lua
+  COMMAND ${NVIM_LUA} scripts/lintdoc.lua
   DEPENDS ${DOCFILES}
   CUSTOM_COMMAND_ARGS USES_TERMINAL)
 add_dependencies(lintdoc nvim)

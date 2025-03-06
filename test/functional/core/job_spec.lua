@@ -21,7 +21,6 @@ local rmdir = n.rmdir
 local assert_alive = n.assert_alive
 local command = n.command
 local fn = n.fn
-local os_kill = n.os_kill
 local retry = t.retry
 local api = n.api
 local NIL = vim.NIL
@@ -63,6 +62,39 @@ describe('jobs', function()
     \ 'user': 0
     \ }
     ]])
+  end)
+
+  it('validation', function()
+    matches(
+      "E475: Invalid argument: job cannot have both 'pty' and 'rpc' options set",
+      pcall_err(command, "call jobstart(['cat', '-'], { 'pty': v:true, 'rpc': v:true })")
+    )
+    matches(
+      'E475: Invalid argument: expected valid directory',
+      pcall_err(command, "call jobstart(['cat', '-'], { 'cwd': 9313843 })")
+    )
+    matches(
+      'E475: Invalid argument: expected valid directory',
+      pcall_err(command, "call jobstart(['cat', '-'], { 'cwd': 'bogusssssss/bogus' })")
+    )
+    matches(
+      "E475: Invalid argument: 'term' must be Boolean",
+      pcall_err(command, "call jobstart(['cat', '-'], { 'term': 'bogus' })")
+    )
+    matches(
+      "E475: Invalid argument: 'term' must be Boolean",
+      pcall_err(command, "call jobstart(['cat', '-'], { 'term': 1 })")
+    )
+    command('set modified')
+    matches(
+      vim.pesc('jobstart(...,{term=true}) requires unmodified buffer'),
+      pcall_err(command, "call jobstart(['cat', '-'], { 'term': v:true })")
+    )
+
+    -- Non-failure cases:
+    command('set nomodified')
+    command("call jobstart(['cat', '-'], { 'term': v:true })")
+    command("call jobstart(['cat', '-'], { 'term': v:false })")
   end)
 
   it('must specify env option as a dict', function()
@@ -411,27 +443,23 @@ describe('jobs', function()
   end)
 
   it('disposed on Nvim exit', function()
-    -- use sleep, which doesn't die on stdin close
-    command(
-      "let g:j =  jobstart(has('win32') ? ['ping', '-n', '1001', '127.0.0.1'] : ['sleep', '1000'], g:job_opts)"
-    )
-    local pid = eval('jobpid(g:j)')
-    neq(NIL, api.nvim_get_proc(pid))
+    -- Start a child process which doesn't die on stdin close.
+    local j = n.fn.jobstart({ n.nvim_prog, '--clean', '--headless' })
+    local pid = n.fn.jobpid(j)
+    eq('number', type(api.nvim_get_proc(pid).pid))
     clear()
     eq(NIL, api.nvim_get_proc(pid))
   end)
 
-  it('can survive the exit of nvim with "detach"', function()
-    command('let g:job_opts.detach = 1')
-    command(
-      "let g:j = jobstart(has('win32') ? ['ping', '-n', '1001', '127.0.0.1'] : ['sleep', '1000'], g:job_opts)"
-    )
-    local pid = eval('jobpid(g:j)')
-    neq(NIL, api.nvim_get_proc(pid))
+  it('can survive Nvim exit with "detach"', function()
+    local j = n.fn.jobstart({ n.nvim_prog, '--clean', '--headless' }, { detach = true })
+    local pid = n.fn.jobpid(j)
+    eq('number', type(api.nvim_get_proc(pid).pid))
     clear()
-    neq(NIL, api.nvim_get_proc(pid))
-    -- clean up after ourselves
-    eq(0, os_kill(pid))
+    -- Still alive.
+    eq('number', type(api.nvim_get_proc(pid).pid))
+    -- Clean up after ourselves.
+    eq(0, vim.uv.kill(pid, 'sigkill'))
   end)
 
   it('can pass user data to the callback', function()
@@ -498,7 +526,6 @@ describe('jobs', function()
 
   it('can redefine callbacks being used by a job', function()
     local screen = Screen.new()
-    screen:attach()
     screen:set_default_attr_ids({
       [1] = { bold = true, foreground = Screen.colors.Blue },
     })
@@ -524,7 +551,6 @@ describe('jobs', function()
 
   it('requires funcrefs for script-local (s:) functions', function()
     local screen = Screen.new(60, 5)
-    screen:attach()
     screen:set_default_attr_ids({
       [1] = { bold = true, foreground = Screen.colors.Blue1 },
       [2] = { foreground = Screen.colors.Grey100, background = Screen.colors.Red },
@@ -910,7 +936,6 @@ describe('jobs', function()
 
     it('hides cursor and flushes messages before blocking', function()
       local screen = Screen.new(50, 6)
-      screen:attach()
       command([[let g:id = jobstart([v:progpath, '--clean', '--headless'])]])
       source([[
         func PrintAndWait()
@@ -943,6 +968,39 @@ describe('jobs', function()
       feed('<CR>')
       fn.jobstop(api.nvim_get_var('id'))
     end)
+
+    it('does not set UI busy with zero timeout #31712', function()
+      local screen = Screen.new(50, 6)
+      command([[let g:id = jobstart(['sleep', '0.3'])]])
+      local busy = 0
+      screen._handle_busy_start = (function(orig)
+        return function()
+          orig(screen)
+          busy = busy + 1
+        end
+      end)(screen._handle_busy_start)
+      source([[
+        func PrintAndPoll()
+          echon "aaa\nbbb"
+          call jobwait([g:id], 0)
+          echon "\nccc"
+        endfunc
+      ]])
+      feed_command('call PrintAndPoll()')
+      screen:expect {
+        grid = [[
+                                                          |
+        {3:                                                  }|
+        aaa                                               |
+        bbb                                               |
+        ccc                                               |
+        {6:Press ENTER or type command to continue}^           |
+      ]],
+      }
+      feed('<CR>')
+      fn.jobstop(api.nvim_get_var('id'))
+      eq(0, busy)
+    end)
   end)
 
   pending('exit event follows stdout, stderr', function()
@@ -970,13 +1028,6 @@ describe('jobs', function()
       }
     )
     eq({ 'notification', 'exit', { 0, 143 } }, next_msg())
-  end)
-
-  it('cannot have both rpc and pty options', function()
-    command('let g:job_opts.pty = v:true')
-    command('let g:job_opts.rpc = v:true')
-    local _, err = pcall(command, "let j = jobstart(['cat', '-'], g:job_opts)")
-    matches("E475: Invalid argument: job cannot have both 'pty' and 'rpc' options set", err)
   end)
 
   it('does not crash when repeatedly failing to start shell', function()
@@ -1201,7 +1252,7 @@ describe('jobs', function()
     })
     -- Wait for startup to complete, so that all terminal responses are received.
     screen:expect([[
-      {1: }                                                 |
+      ^                                                  |
       ~                                                 |*3
       {1:[No Name]                       0,0-1          All}|
                                                         |
@@ -1209,12 +1260,16 @@ describe('jobs', function()
     ]])
 
     feed(':q<CR>')
-    screen:expect([[
-                                                        |
-      [Process exited 0]{1: }                               |
-                                                        |*4
-      {3:-- TERMINAL --}                                    |
-    ]])
+    if is_os('freebsd') then
+      screen:expect { any = vim.pesc('[Process exited 0]') }
+    else
+      screen:expect([[
+                                                          |
+        [Process exited 0]^                                |
+                                                          |*4
+        {3:-- TERMINAL --}                                    |
+      ]])
+    end
   end)
 end)
 
@@ -1223,7 +1278,6 @@ describe('pty process teardown', function()
   before_each(function()
     clear()
     screen = Screen.new(30, 6)
-    screen:attach()
     screen:expect([[
       ^                              |
       {1:~                             }|*4
@@ -1234,7 +1288,7 @@ describe('pty process teardown', function()
   it('does not prevent/delay exit. #4798 #4900', function()
     skip(fn.executable('sleep') == 0, 'missing "sleep" command')
     -- Use a nested nvim (in :term) to test without --headless.
-    fn.termopen({
+    fn.jobstart({
       n.nvim_prog,
       '-u',
       'NONE',
@@ -1247,7 +1301,10 @@ describe('pty process teardown', function()
       '+terminal',
       '+!(sleep 300 &)',
       '+qa',
-    }, { env = { VIMRUNTIME = os.getenv('VIMRUNTIME') } })
+    }, {
+      term = true,
+      env = { VIMRUNTIME = os.getenv('VIMRUNTIME') },
+    })
 
     -- Exiting should terminate all descendants (PTY, its children, ...).
     screen:expect([[

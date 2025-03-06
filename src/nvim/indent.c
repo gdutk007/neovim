@@ -34,7 +34,6 @@
 #include "nvim/option.h"
 #include "nvim/option_defs.h"
 #include "nvim/option_vars.h"
-#include "nvim/optionstr.h"
 #include "nvim/os/input.h"
 #include "nvim/plines.h"
 #include "nvim/pos_defs.h"
@@ -793,7 +792,7 @@ bool briopt_check(char *briopt, win_T *wp)
   }
 
   while (*p != NUL) {
-    // Note: Keep this in sync with p_briopt_values
+    // Note: Keep this in sync with opt_briopt_values.
     if (strncmp(p, "shift:", 6) == 0
         && ((p[6] == '-' && ascii_isdigit(p[7])) || ascii_isdigit(p[6]))) {
       p += 6;
@@ -872,7 +871,7 @@ int get_breakindent_win(win_T *wp, char *line)
       || prev_tick != buf_get_changedtick(wp->w_buffer)
       || prev_listopt != wp->w_briopt_list
       || prev_no_ts != no_ts
-      || prev_dy_uhex != (dy_flags & DY_UHEX)
+      || prev_dy_uhex != (dy_flags & kOptDyFlagUhex)
       || prev_flp == NULL
       || strcmp(prev_flp, get_flp_value(wp->w_buffer)) != 0
       || prev_line == NULL || strcmp(prev_line, line) != 0) {
@@ -893,7 +892,7 @@ int get_breakindent_win(win_T *wp, char *line)
     prev_listopt = wp->w_briopt_list;
     prev_list = 0;
     prev_no_ts = no_ts;
-    prev_dy_uhex = (dy_flags & DY_UHEX);
+    prev_dy_uhex = (dy_flags & kOptDyFlagUhex);
     xfree(prev_flp);
     prev_flp = xstrdup(get_flp_value(wp->w_buffer));
     // add additional indent for numbered lists
@@ -1182,7 +1181,7 @@ int get_expr_indent(void)
     sandbox++;
   }
   textlock++;
-  current_sctx = curbuf->b_p_script_ctx[BV_INDE].script_ctx;
+  current_sctx = curbuf->b_p_script_ctx[kBufOptIndentexpr];
 
   // Need to make a copy, the 'indentexpr' option could be changed while
   // evaluating it.

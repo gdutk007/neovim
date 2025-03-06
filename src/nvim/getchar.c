@@ -2,7 +2,6 @@
 // file, manipulations with redo buffer and stuff buffer.
 
 #include <assert.h>
-#include <lauxlib.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -11,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "klib/kvec.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/vim.h"
@@ -29,6 +29,7 @@
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_docmd.h"
 #include "nvim/ex_getln.h"
+#include "nvim/ex_getln_defs.h"
 #include "nvim/garray.h"
 #include "nvim/garray_defs.h"
 #include "nvim/getchar.h"
@@ -38,6 +39,7 @@
 #include "nvim/insexpand.h"
 #include "nvim/keycodes.h"
 #include "nvim/lua/executor.h"
+#include "nvim/macros_defs.h"
 #include "nvim/main.h"
 #include "nvim/mapping.h"
 #include "nvim/mapping_defs.h"
@@ -45,6 +47,7 @@
 #include "nvim/mbyte_defs.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
+#include "nvim/memory_defs.h"
 #include "nvim/message.h"
 #include "nvim/mouse.h"
 #include "nvim/move.h"
@@ -53,6 +56,7 @@
 #include "nvim/ops.h"
 #include "nvim/option_vars.h"
 #include "nvim/os/fileio.h"
+#include "nvim/os/fileio_defs.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
 #include "nvim/os/os_defs.h"
@@ -95,15 +99,15 @@ static FileDescriptor scriptin[NSCRIPT] = { 0 };
 
 #define MINIMAL_SIZE 20                 // minimal size for b_str
 
-static buffheader_T redobuff = { { NULL, { NUL } }, NULL, 0, 0 };
-static buffheader_T old_redobuff = { { NULL, { NUL } }, NULL, 0, 0 };
-static buffheader_T recordbuff = { { NULL, { NUL } }, NULL, 0, 0 };
+static buffheader_T redobuff = { { NULL, 0, { NUL } }, NULL, 0, 0, false };
+static buffheader_T old_redobuff = { { NULL, 0, { NUL } }, NULL, 0, 0, false };
+static buffheader_T recordbuff = { { NULL, 0, { NUL } }, NULL, 0, 0, false };
 
 /// First read ahead buffer. Used for translated commands.
-static buffheader_T readbuf1 = { { NULL, { NUL } }, NULL, 0, 0 };
+static buffheader_T readbuf1 = { { NULL, 0, { NUL } }, NULL, 0, 0, false };
 
 /// Second read ahead buffer. Used for redo.
-static buffheader_T readbuf2 = { { NULL, { NUL } }, NULL, 0, 0 };
+static buffheader_T readbuf2 = { { NULL, 0, { NUL } }, NULL, 0, 0, false };
 
 /// Buffer used to store typed characters for vim.on_key().
 static kvec_withinit_t(char, MAXMAPLEN + 1) on_key_buf = KVI_INITIAL_VALUE(on_key_buf);
@@ -183,15 +187,17 @@ static void free_buff(buffheader_T *buf)
 /// K_SPECIAL in the returned string is escaped.
 ///
 /// @param dozero  count == zero is not an error
-static char *get_buffcont(buffheader_T *buffer, int dozero)
+/// @param len     the length of the returned buffer
+static char *get_buffcont(buffheader_T *buffer, int dozero, size_t *len)
 {
   size_t count = 0;
   char *p = NULL;
+  size_t i = 0;
 
   // compute the total length of the string
   for (const buffblock_T *bp = buffer->bh_first.b_next;
        bp != NULL; bp = bp->b_next) {
-    count += strlen(bp->b_str);
+    count += bp->b_strlen;
   }
 
   if (count > 0 || dozero) {
@@ -204,7 +210,13 @@ static char *get_buffcont(buffheader_T *buffer, int dozero)
       }
     }
     *p2 = NUL;
+    i = (size_t)(p2 - p);
   }
+
+  if (len != NULL) {
+    *len = i;
+  }
+
   return p;
 }
 
@@ -213,12 +225,16 @@ static char *get_buffcont(buffheader_T *buffer, int dozero)
 /// K_SPECIAL in the returned string is escaped.
 char *get_recorded(void)
 {
-  char *p = get_buffcont(&recordbuff, true);
+  size_t len;
+  char *p = get_buffcont(&recordbuff, true, &len);
+  if (p == NULL) {
+    return NULL;
+  }
+
   free_buff(&recordbuff);
 
   // Remove the characters that were added the last time, these must be the
   // (possibly mapped) characters that stopped the recording.
-  size_t len = strlen(p);
   if (len >= last_recorded_len) {
     len -= last_recorded_len;
     p[len] = NUL;
@@ -235,9 +251,11 @@ char *get_recorded(void)
 
 /// Return the contents of the redo buffer as a single string.
 /// K_SPECIAL in the returned string is escaped.
-char *get_inserted(void)
+String get_inserted(void)
 {
-  return get_buffcont(&redobuff, false);
+  size_t len = 0;
+  char *str = get_buffcont(&redobuff, false, &len);
+  return cbuf_as_string(str, len);
 }
 
 /// Add string after the current block of the given buffer
@@ -257,27 +275,31 @@ static void add_buff(buffheader_T *const buf, const char *const s, ptrdiff_t sle
   }
 
   if (buf->bh_first.b_next == NULL) {  // first add to list
-    buf->bh_space = 0;
     buf->bh_curr = &(buf->bh_first);
+    buf->bh_create_newblock = true;
   } else if (buf->bh_curr == NULL) {  // buffer has already been read
     iemsg(_("E222: Add to read buffer"));
     return;
   } else if (buf->bh_index != 0) {
     memmove(buf->bh_first.b_next->b_str,
             buf->bh_first.b_next->b_str + buf->bh_index,
-            strlen(buf->bh_first.b_next->b_str + buf->bh_index) + 1);
+            (buf->bh_first.b_next->b_strlen - buf->bh_index) + 1);
+    buf->bh_first.b_next->b_strlen -= buf->bh_index;
+    buf->bh_space += buf->bh_index;
   }
   buf->bh_index = 0;
 
-  if (buf->bh_space >= (size_t)slen) {
-    size_t len = strlen(buf->bh_curr->b_str);
-    xmemcpyz(buf->bh_curr->b_str + len, s, (size_t)slen);
+  if (!buf->bh_create_newblock && buf->bh_space >= (size_t)slen) {
+    xmemcpyz(buf->bh_curr->b_str + buf->bh_curr->b_strlen, s, (size_t)slen);
+    buf->bh_curr->b_strlen += (size_t)slen;
     buf->bh_space -= (size_t)slen;
   } else {
     size_t len = MAX(MINIMAL_SIZE, (size_t)slen);
     buffblock_T *p = xmalloc(offsetof(buffblock_T, b_str) + len + 1);
-    buf->bh_space = len - (size_t)slen;
     xmemcpyz(p->b_str, s, (size_t)slen);
+    p->b_strlen = (size_t)slen;
+    buf->bh_space = len - (size_t)slen;
+    buf->bh_create_newblock = false;
 
     p->b_next = buf->bh_curr->b_next;
     buf->bh_curr->b_next = p;
@@ -292,12 +314,12 @@ static void delete_buff_tail(buffheader_T *buf, int slen)
   if (buf->bh_curr == NULL) {
     return;  // nothing to delete
   }
-  int len = (int)strlen(buf->bh_curr->b_str);
-  if (len < slen) {
+  if (buf->bh_curr->b_strlen < (size_t)slen) {
     return;
   }
 
-  buf->bh_curr->b_str[len - slen] = NUL;
+  buf->bh_curr->b_str[buf->bh_curr->b_strlen - (size_t)slen] = NUL;
+  buf->bh_curr->b_strlen -= (size_t)slen;
   buf->bh_space += (size_t)slen;
 }
 
@@ -305,8 +327,8 @@ static void delete_buff_tail(buffheader_T *buf, int slen)
 static void add_num_buff(buffheader_T *buf, int n)
 {
   char number[32];
-  snprintf(number, sizeof(number), "%d", n);
-  add_buff(buf, number, -1);
+  int numberlen = snprintf(number, sizeof(number), "%d", n);
+  add_buff(buf, number, numberlen);
 }
 
 /// Add byte or special key 'c' to buffer "buf".
@@ -314,17 +336,20 @@ static void add_num_buff(buffheader_T *buf, int n)
 static void add_byte_buff(buffheader_T *buf, int c)
 {
   char temp[4];
+  ptrdiff_t templen;
   if (IS_SPECIAL(c) || c == K_SPECIAL || c == NUL) {
     // Translate special key code into three byte sequence.
     temp[0] = (char)K_SPECIAL;
     temp[1] = (char)K_SECOND(c);
     temp[2] = (char)K_THIRD(c);
     temp[3] = NUL;
+    templen = 3;
   } else {
     temp[0] = (char)c;
     temp[1] = NUL;
+    templen = 1;
   }
-  add_buff(buf, temp, -1);
+  add_buff(buf, temp, templen);
 }
 
 /// Add character 'c' to buffer "buf".
@@ -385,11 +410,11 @@ static void start_stuff(void)
 {
   if (readbuf1.bh_first.b_next != NULL) {
     readbuf1.bh_curr = &(readbuf1.bh_first);
-    readbuf1.bh_space = 0;
+    readbuf1.bh_create_newblock = true;  // force a new block to be created (see add_buff())
   }
   if (readbuf2.bh_first.b_next != NULL) {
     readbuf2.bh_curr = &(readbuf2.bh_first);
-    readbuf2.bh_space = 0;
+    readbuf2.bh_create_newblock = true;  // force a new block to be created (see add_buff())
   }
 }
 
@@ -456,7 +481,7 @@ void beep_flush(void)
 {
   if (emsg_silent == 0) {
     flush_buffers(FLUSH_MINIMAL);
-    vim_beep(BO_ERROR);
+    vim_beep(kOptBoFlagError);
   }
 }
 
@@ -498,12 +523,13 @@ void saveRedobuff(save_redo_T *save_redo)
   old_redobuff.bh_first.b_next = NULL;
 
   // Make a copy, so that ":normal ." in a function works.
-  char *const s = get_buffcont(&save_redo->sr_redobuff, false);
+  size_t slen;
+  char *const s = get_buffcont(&save_redo->sr_redobuff, false, &slen);
   if (s == NULL) {
     return;
   }
 
-  add_buff(&redobuff, s, -1);
+  add_buff(&redobuff, s, (ptrdiff_t)slen);
   xfree(s);
 }
 
@@ -1497,7 +1523,7 @@ int merge_modifiers(int c_arg, int *modifiers)
   int c = c_arg;
 
   if (*modifiers & MOD_MASK_CTRL) {
-    if ((c >= '`' && c <= 0x7f) || (c >= '@' && c <= '_')) {
+    if (c >= '@' && c <= 0x7f) {
       c &= 0x1f;
       if (c == NUL) {
         c = K_ZERO;
@@ -1846,29 +1872,73 @@ bool char_avail(void)
   return retval != NUL;
 }
 
+static int no_reduce_keys = 0;  ///< Do not apply modifiers to the key.
+
 /// "getchar()" and "getcharstr()" functions
-static void getchar_common(typval_T *argvars, typval_T *rettv)
+static void getchar_common(typval_T *argvars, typval_T *rettv, bool allow_number)
   FUNC_ATTR_NONNULL_ALL
 {
-  varnumber_T n;
+  varnumber_T n = 0;
+  const int called_emsg_start = called_emsg;
   bool error = false;
+  bool simplify = true;
+  char cursor_flag = NUL;
+
+  if (argvars[0].v_type != VAR_UNKNOWN
+      && tv_check_for_opt_dict_arg(argvars, 1) == FAIL) {
+    return;
+  }
+
+  if (argvars[0].v_type != VAR_UNKNOWN && argvars[1].v_type == VAR_DICT) {
+    dict_T *d = argvars[1].vval.v_dict;
+
+    if (allow_number) {
+      allow_number = tv_dict_get_bool(d, "number", true);
+    } else if (tv_dict_has_key(d, "number")) {
+      semsg(_(e_invarg2), "number");
+    }
+
+    simplify = tv_dict_get_bool(d, "simplify", true);
+
+    const char *cursor_str = tv_dict_get_string(d, "cursor", false);
+    if (cursor_str != NULL) {
+      if (strcmp(cursor_str, "hide") != 0
+          && strcmp(cursor_str, "keep") != 0
+          && strcmp(cursor_str, "msg") != 0) {
+        semsg(_(e_invargNval), "cursor", cursor_str);
+      } else {
+        cursor_flag = cursor_str[0];
+      }
+    }
+  }
+
+  if (called_emsg != called_emsg_start) {
+    return;
+  }
+
+  if (cursor_flag == 'h') {
+    ui_busy_start();
+  }
 
   no_mapping++;
   allow_keys++;
+  if (!simplify) {
+    no_reduce_keys++;
+  }
   while (true) {
-    if (msg_col > 0) {
-      // Position the cursor. Needed after a message that ends in a space.
+    if (cursor_flag == 'm' || (cursor_flag == NUL && msg_col > 0)) {
       ui_cursor_goto(msg_row, msg_col);
     }
 
-    if (argvars[0].v_type == VAR_UNKNOWN) {
+    if (argvars[0].v_type == VAR_UNKNOWN
+        || (argvars[0].v_type == VAR_NUMBER && argvars[0].vval.v_number == -1)) {
       // getchar(): blocking wait.
       // TODO(bfredl): deduplicate shared logic with state_enter ?
       if (!char_avail()) {
         // Flush screen updates before blocking.
         ui_flush();
         input_get(NULL, 0, -1, typebuf.tb_change_cnt, main_loop.events);
-        if (!multiqueue_empty(main_loop.events)) {
+        if (!input_available() && !multiqueue_empty(main_loop.events)) {
           state_handle_k_event();
           continue;
         }
@@ -1896,14 +1966,20 @@ static void getchar_common(typval_T *argvars, typval_T *rettv)
   }
   no_mapping--;
   allow_keys--;
+  if (!simplify) {
+    no_reduce_keys--;
+  }
+
+  if (cursor_flag == 'h') {
+    ui_busy_stop();
+  }
 
   set_vim_var_nr(VV_MOUSE_WIN, 0);
   set_vim_var_nr(VV_MOUSE_WINID, 0);
   set_vim_var_nr(VV_MOUSE_LNUM, 0);
   set_vim_var_nr(VV_MOUSE_COL, 0);
 
-  rettv->vval.v_number = n;
-  if (n != 0 && (IS_SPECIAL(n) || mod_mask != 0)) {
+  if (n != 0 && (!allow_number || IS_SPECIAL(n) || mod_mask != 0)) {
     char temp[10];                // modifier: 3, mbyte-char: 6, NUL: 1
     int i = 0;
 
@@ -1921,9 +1997,9 @@ static void getchar_common(typval_T *argvars, typval_T *rettv)
       i += utf_char2bytes((int)n, temp + i);
     }
     assert(i < 10);
-    temp[i++] = NUL;
+    temp[i] = NUL;
     rettv->v_type = VAR_STRING;
-    rettv->vval.v_string = xstrdup(temp);
+    rettv->vval.v_string = xmemdupz(temp, (size_t)i);
 
     if (is_mouse_key((int)n)) {
       int row = mouse_row;
@@ -1950,35 +2026,23 @@ static void getchar_common(typval_T *argvars, typval_T *rettv)
         set_vim_var_nr(VV_MOUSE_COL, col + 1);
       }
     }
+  } else if (!allow_number) {
+    rettv->v_type = VAR_STRING;
+  } else {
+    rettv->vval.v_number = n;
   }
 }
 
 /// "getchar()" function
 void f_getchar(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 {
-  getchar_common(argvars, rettv);
+  getchar_common(argvars, rettv, true);
 }
 
 /// "getcharstr()" function
 void f_getcharstr(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
 {
-  getchar_common(argvars, rettv);
-
-  if (rettv->v_type != VAR_NUMBER) {
-    return;
-  }
-
-  char temp[7];   // mbyte-char: 6, NUL: 1
-  const varnumber_T n = rettv->vval.v_number;
-  int i = 0;
-
-  if (n != 0) {
-    i += utf_char2bytes((int)n, temp);
-  }
-  assert(i < 7);
-  temp[i++] = NUL;
-  rettv->v_type = VAR_STRING;
-  rettv->vval.v_string = xstrdup(temp);
+  getchar_common(argvars, rettv, false);
 }
 
 /// "getcharmod()" function
@@ -2036,6 +2100,12 @@ static bool at_ins_compl_key(void)
 /// @return  the length of the replaced bytes, 0 if nothing changed, -1 for error.
 static int check_simplify_modifier(int max_offset)
 {
+  // We want full modifiers in Terminal mode so that the key can be correctly
+  // encoded
+  if ((State & MODE_TERMINAL) || no_reduce_keys > 0) {
+    return 0;
+  }
+
   for (int offset = 0; offset < max_offset; offset++) {
     if (offset + 3 >= typebuf.tb_len) {
       break;
@@ -2373,7 +2443,7 @@ static int handle_mapping(int *keylenp, const bool *timedout, int *mapdepth)
           buf[1] = (char)KS_EXTRA;
           buf[2] = KE_IGNORE;
           buf[3] = NUL;
-          map_str = xstrdup(buf);
+          map_str = xmemdupz(buf, 3);
           if (State & MODE_CMDLINE) {
             // redraw the command below the error
             msg_didout = true;

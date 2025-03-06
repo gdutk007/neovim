@@ -637,7 +637,6 @@ describe('lua stdlib', function()
     matches('big failure\nvery async', remove_trace(eval('v:errmsg')))
 
     local screen = Screen.new(60, 5)
-    screen:attach()
     screen:expect {
       grid = [[
       ^                                                            |
@@ -971,6 +970,7 @@ describe('lua stdlib', function()
     )
     eq(NIL, exec_lua("return vim.tbl_get({}, 'missing_key')"))
     eq(NIL, exec_lua('return vim.tbl_get({})'))
+    eq(NIL, exec_lua("return vim.tbl_get({}, nil, 'key')"))
     eq(1, exec_lua("return select('#', vim.tbl_get({}))"))
     eq(1, exec_lua("return select('#', vim.tbl_get({ nested = {} }, 'nested', 'missing_key'))"))
   end)
@@ -1403,7 +1403,6 @@ describe('lua stdlib', function()
     end)
 
     local screen = Screen.new(50, 7)
-    screen:attach()
     exec_lua([[
       timer = vim.uv.new_timer()
       timer:start(20, 0, function ()
@@ -1416,7 +1415,7 @@ describe('lua stdlib', function()
     screen:expect {
       grid = [[
       {9:[string "<nvim>"]:6: E5560: rpcrequest must not be}|
-      {9: called in a lua loop callback}                    |
+      {9: called in a fast event context}                   |
       {9:stack traceback:}                                  |
       {9:        [C]: in function 'rpcrequest'}             |
       {9:        [string "<nvim>"]:6: in function <[string }|
@@ -2130,7 +2129,6 @@ describe('lua stdlib', function()
     eq({ 1, 5 }, api.nvim_win_get_cursor(0))
 
     local screen = Screen.new(60, 3)
-    screen:attach()
     eq(1, eval('v:hlsearch'))
     screen:expect {
       grid = [[
@@ -3401,7 +3399,6 @@ stack traceback:
 
     it('callback is not invoked recursively #30752', function()
       local screen = Screen.new(60, 10)
-      screen:attach()
       exec_lua([[
         vim.on_key(function(key, typed)
           vim.api.nvim_echo({
@@ -3439,7 +3436,6 @@ stack traceback:
     end)
 
     it('can discard input', function()
-      clear()
       -- discard every other normal 'x' command
       exec_lua [[
         n_key = 0
@@ -3465,7 +3461,6 @@ stack traceback:
     end)
 
     it('callback invalid return', function()
-      clear()
       -- second key produces an error which removes the callback
       exec_lua [[
         n_call = 0
@@ -3779,7 +3774,6 @@ stack traceback:
 
     it('fails in fast callbacks #26122', function()
       local screen = Screen.new(80, 10)
-      screen:attach()
       exec_lua([[
         local timer = vim.uv.new_timer()
         timer:start(0, 0, function()
@@ -3788,7 +3782,7 @@ stack traceback:
         end)
       ]])
       screen:expect({
-        any = pesc('E5560: vim.wait must not be called in a lua loop callback'),
+        any = pesc('E5560: vim.wait must not be called in a fast event context'),
       })
       feed('<CR>')
       assert_alive()
@@ -3797,7 +3791,6 @@ stack traceback:
 
   it('vim.notify_once', function()
     local screen = Screen.new(60, 5)
-    screen:attach()
     screen:expect {
       grid = [[
       ^                                                            |
@@ -3961,6 +3954,17 @@ stack traceback:
       eq(win2, val)
     end)
 
+    it('failure modes', function()
+      matches(
+        'nvim_exec2%(%), line 1: Vim:E492: Not an editor command: fooooo',
+        pcall_err(exec_lua, [[vim.api.nvim_win_call(0, function() vim.cmd 'fooooo' end)]])
+      )
+      eq(
+        'Error executing lua: [string "<nvim>"]:0: fooooo',
+        pcall_err(exec_lua, [[vim.api.nvim_win_call(0, function() error('fooooo') end)]])
+      )
+    end)
+
     it('does not cause ml_get errors with invalid visual selection', function()
       -- Add lines to the current buffer and make another window looking into an empty buffer.
       exec_lua [[
@@ -3994,7 +3998,6 @@ stack traceback:
     it('updates ruler if cursor moved', function()
       -- Fixed for win_execute in vim-patch:8.1.2124, but should've applied to nvim_win_call too!
       local screen = Screen.new(30, 5)
-      screen:attach()
       exec_lua [[
         _G.api = vim.api
         vim.opt.ruler = true
@@ -4137,7 +4140,6 @@ stack traceback:
 
   it('vim.lua_omnifunc', function()
     local screen = Screen.new(60, 5)
-    screen:attach()
     command [[ set omnifunc=v:lua.vim.lua_omnifunc ]]
 
     -- Note: the implementation is shared with lua command line completion.

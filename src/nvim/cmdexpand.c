@@ -42,7 +42,6 @@
 #include "nvim/highlight_defs.h"
 #include "nvim/highlight_group.h"
 #include "nvim/keycodes.h"
-#include "nvim/log.h"
 #include "nvim/lua/executor.h"
 #include "nvim/macros_defs.h"
 #include "nvim/mapping.h"
@@ -100,7 +99,7 @@ static int compl_selected;
 static bool cmdline_fuzzy_completion_supported(const expand_T *const xp)
   FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE
 {
-  return (wop_flags & WOP_FUZZY)
+  return (wop_flags & kOptWopFlagFuzzy)
          && xp->xp_context != EXPAND_BOOL_SETTINGS
          && xp->xp_context != EXPAND_COLORS
          && xp->xp_context != EXPAND_COMPILER
@@ -133,7 +132,7 @@ static bool cmdline_fuzzy_completion_supported(const expand_T *const xp)
 bool cmdline_fuzzy_complete(const char *const fuzzystr)
   FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ALL FUNC_ATTR_PURE
 {
-  return (wop_flags & WOP_FUZZY) && *fuzzystr != NUL;
+  return (wop_flags & kOptWopFlagFuzzy) && *fuzzystr != NUL;
 }
 
 /// Sort function for the completion matches.
@@ -243,7 +242,12 @@ int nextwild(expand_T *xp, int type, int options, bool escape)
   char *p2;
 
   if (xp->xp_numfiles == -1) {
-    set_expand_context(xp);
+    if (ccline->input_fn && ccline->xp_context == EXPAND_COMMANDS) {
+      // Expand commands typed in input() function
+      set_cmd_context(xp, ccline->cmdbuff, ccline->cmdlen, ccline->cmdpos, false);
+    } else {
+      set_expand_context(xp);
+    }
     if (xp->xp_context == EXPAND_LUA) {
       nlua_expand_pat(xp);
     }
@@ -284,7 +288,7 @@ int nextwild(expand_T *xp, int type, int options, bool escape)
       p1 = addstar(xp->xp_pattern, xp->xp_pattern_len, xp->xp_context);
     }
     // Translate string into pattern and expand it.
-    const int use_options = (options
+    const int use_options = ((options & ~WILD_KEEP_SOLE_ITEM)
                              | WILD_HOME_REPLACE
                              | WILD_ADD_SLASH
                              | WILD_SILENT
@@ -335,7 +339,7 @@ int nextwild(expand_T *xp, int type, int options, bool escape)
 
   if (xp->xp_numfiles <= 0 && p2 == NULL) {
     beep_flush();
-  } else if (xp->xp_numfiles == 1) {
+  } else if (xp->xp_numfiles == 1 && !(options & WILD_KEEP_SOLE_ITEM)) {
     // free expanded pattern
     ExpandOne(xp, NULL, NULL, 0, WILD_FREE);
   }
@@ -646,6 +650,7 @@ static void redraw_wildmenu(expand_T *xp, int num_matches, char **matches, int m
 /// in "xp->xp_selected"
 static char *get_next_or_prev_match(int mode, expand_T *xp)
 {
+  // When no matches found, return NULL
   if (xp->xp_numfiles <= 0) {
     return NULL;
   }
@@ -653,45 +658,43 @@ static char *get_next_or_prev_match(int mode, expand_T *xp)
   int findex = xp->xp_selected;
 
   if (mode == WILD_PREV) {
+    // Select the last entry if at original text
     if (findex == -1) {
       findex = xp->xp_numfiles;
     }
+    // Otherwise select the previous entry
     findex--;
   } else if (mode == WILD_NEXT) {
+    // Select the next entry
     findex++;
-  } else if (mode == WILD_PAGEUP) {
-    if (findex == 0) {
-      // at the first entry, don't select any entries
-      findex = -1;
-    } else if (findex == -1) {
-      // no entry is selected. select the last entry
-      findex = xp->xp_numfiles - 1;
-    } else {
-      // go up by the pum height
-      int ht = pum_get_height();
-      if (ht > 3) {
-        ht -= 2;
-      }
-      findex -= ht;
-      findex = MAX(findex, 0);  // few entries left, select the first entry
+  } else if (mode == WILD_PAGEUP || mode == WILD_PAGEDOWN) {
+    // Get the height of popup menu (used for both PAGEUP and PAGEDOWN)
+    int ht = pum_get_height();
+    if (ht > 3) {
+      ht -= 2;
     }
-  } else if (mode == WILD_PAGEDOWN) {
-    if (findex == xp->xp_numfiles - 1) {
-      // at the last entry, don't select any entries
-      findex = -1;
-    } else if (findex == -1) {
-      // no entry is selected. select the first entry
-      findex = 0;
-    } else {
-      // go down by the pum height
-      int ht = pum_get_height();
-      if (ht > 3) {
-        ht -= 2;
-      }
-      findex += ht;
-      if (findex >= xp->xp_numfiles) {
-        // few entries left, select the last entry
+
+    if (mode == WILD_PAGEUP) {
+      if (findex == 0) {
+        // at the first entry, don't select any entries
+        findex = -1;
+      } else if (findex < 0) {
+        // no entry is selected. select the last entry
         findex = xp->xp_numfiles - 1;
+      } else {
+        // go up by the pum height
+        findex = MAX(findex - ht, 0);
+      }
+    } else {  // mode == WILD_PAGEDOWN
+      if (findex == xp->xp_numfiles - 1) {
+        // at the last entry, don't select any entries
+        findex = -1;
+      } else if (findex < 0) {
+        // no entry is selected. select the first entry
+        findex = 0;
+      } else {
+        // go down by the pum height
+        findex = MIN(findex + ht, xp->xp_numfiles - 1);
       }
     }
   } else {  // mode == WILD_PUM_WANT
@@ -699,21 +702,27 @@ static char *get_next_or_prev_match(int mode, expand_T *xp)
     findex = pum_want.item;
   }
 
-  // When wrapping around, return the original string, set findex to -1.
-  if (findex < 0) {
-    findex = xp->xp_orig == NULL ? xp->xp_numfiles - 1 : -1;
+  // Handle wrapping around
+  if (findex < 0 || findex >= xp->xp_numfiles) {
+    // If original text exists, return to it when wrapping around
+    if (xp->xp_orig != NULL) {
+      findex = -1;
+    } else {
+      // Wrap around to opposite end
+      findex = (findex < 0) ? xp->xp_numfiles - 1 : 0;
+    }
   }
-  if (findex >= xp->xp_numfiles) {
-    findex = xp->xp_orig == NULL ? 0 : -1;
-  }
+
+  // Display matches on screen
   if (compl_match_array) {
     compl_selected = findex;
     cmdline_pum_display(false);
   } else if (p_wmnu) {
     redraw_wildmenu(xp, xp->xp_numfiles, xp->xp_files, findex, cmd_showtail);
   }
-  xp->xp_selected = findex;
 
+  xp->xp_selected = findex;
+  // Return the original text or the selected match
   return xstrdup(findex == -1 ? xp->xp_orig : xp->xp_files[findex]);
 }
 
@@ -806,7 +815,7 @@ static char *find_longest_match(expand_T *xp, int options)
     }
     if (i < xp->xp_numfiles) {
       if (!(options & WILD_NO_BEEP)) {
-        vim_beep(BO_WILD);
+        vim_beep(kOptBoFlagWildmode);
       }
       break;
     }
@@ -979,20 +988,19 @@ void ExpandCleanup(expand_T *xp)
 /// @param linenr       line number of matches to display
 /// @param maxlen       maximum number of characters in each line
 /// @param showtail     display only the tail of the full path of a file name
-/// @param dir_attr     highlight attribute to use for directory names
 static void showmatches_oneline(expand_T *xp, char **matches, int numMatches, int lines, int linenr,
-                                int maxlen, bool showtail, int dir_attr)
+                                int maxlen, bool showtail)
 {
   char *p;
   int lastlen = 999;
   for (int j = linenr; j < numMatches; j += lines) {
     if (xp->xp_context == EXPAND_TAGS_LISTFILES) {
-      msg_outtrans(matches[j], HL_ATTR(HLF_D));
+      msg_outtrans(matches[j], HLF_D, false);
       p = matches[j] + strlen(matches[j]) + 1;
       msg_advance(maxlen + 1);
       msg_puts(p);
       msg_advance(maxlen + 3);
-      msg_outtrans_long(p + 2, HL_ATTR(HLF_D));
+      msg_outtrans_long(p + 2, HLF_D);
       break;
     }
     for (int i = maxlen - lastlen; --i >= 0;) {
@@ -1029,7 +1037,7 @@ static void showmatches_oneline(expand_T *xp, char **matches, int numMatches, in
       isdir = false;
       p = SHOW_MATCH(j);
     }
-    lastlen = msg_outtrans(p, isdir ? dir_attr : 0);
+    lastlen = msg_outtrans(p, isdir ? HLF_D : 0, false);
   }
   if (msg_col > 0) {  // when not wrapped around
     msg_clr_eos();
@@ -1070,7 +1078,7 @@ int showmatches(expand_T *xp, bool wildmenu)
 
   bool compl_use_pum = (ui_has(kUICmdline)
                         ? ui_has(kUIPopupmenu)
-                        : wildmenu && (wop_flags & WOP_PUM))
+                        : wildmenu && (wop_flags & kOptWopFlagPum))
                        || ui_has(kUIWildmenu);
 
   if (compl_use_pum) {
@@ -1085,6 +1093,7 @@ int showmatches(expand_T *xp, bool wildmenu)
     ui_flush();
     cmdline_row = msg_row;
     msg_didany = false;                 // lines_left will be set again
+    msg_ext_set_kind("wildlist");
     msg_start();                        // prepare for paging
   }
 
@@ -1119,18 +1128,16 @@ int showmatches(expand_T *xp, bool wildmenu)
       lines = (numMatches + columns - 1) / columns;
     }
 
-    int attr = HL_ATTR(HLF_D);      // find out highlighting for directories
-
     if (xp->xp_context == EXPAND_TAGS_LISTFILES) {
-      msg_puts_attr(_("tagname"), HL_ATTR(HLF_T));
+      msg_puts_hl(_("tagname"), HLF_T, false);
       msg_clr_eos();
       msg_advance(maxlen - 3);
-      msg_puts_attr(_(" kind file\n"), HL_ATTR(HLF_T));
+      msg_puts_hl(_(" kind file\n"), HLF_T, false);
     }
 
     // list the files line by line
     for (int i = 0; i < lines; i++) {
-      showmatches_oneline(xp, matches, numMatches, lines, i, maxlen, showtail, attr);
+      showmatches_oneline(xp, matches, numMatches, lines, i, maxlen, showtail);
       if (got_int) {
         got_int = false;
         break;
@@ -1941,7 +1948,7 @@ static const char *set_context_by_cmdname(const char *cmd, cmdidx_T cmdidx, expa
   case CMD_tjump:
   case CMD_stjump:
   case CMD_ptjump:
-    if (wop_flags & WOP_TAGFILE) {
+    if (wop_flags & kOptWopFlagTagfile) {
       xp->xp_context = EXPAND_TAGS_LISTFILES;
     } else {
       xp->xp_context = EXPAND_TAGS;
@@ -2003,6 +2010,7 @@ static const char *set_context_by_cmdname(const char *cmd, cmdidx_T cmdidx, expa
     FALLTHROUGH;
   case CMD_buffer:
   case CMD_sbuffer:
+  case CMD_pbuffer:
   case CMD_checktime:
     xp->xp_context = EXPAND_BUFFERS;
     xp->xp_pattern = (char *)arg;

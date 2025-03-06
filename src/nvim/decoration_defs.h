@@ -19,13 +19,21 @@ typedef kvec_t(VirtTextChunk) VirtText;
 /// Keep in sync with virt_text_pos_str[] in decoration.h
 typedef enum {
   kVPosEndOfLine,
-  kVPosOverlay,
-  kVPosWinCol,
-  kVPosRightAlign,
+  kVPosEndOfLineRightAlign,
   kVPosInline,
+  kVPosOverlay,
+  kVPosRightAlign,
+  kVPosWinCol,
 } VirtTextPos;
 
-typedef kvec_t(struct virt_line { VirtText line; bool left_col; }) VirtLines;
+/// Flags for virtual lines
+enum {
+  kVLLeftcol = 1,  ///< Start at left window edge, ignoring number column, etc.
+  kVLScroll = 2,   ///< Can scroll horizontally with 'nowrap'
+  // kVLWrap = 4,
+};
+
+typedef kvec_t(struct virt_line { VirtText line; int flags; }) VirtLines;
 
 typedef uint16_t DecorPriority;
 #define DECOR_PRIORITY_BASE 0x1000
@@ -46,6 +54,7 @@ enum {
   kSHSpellOn = 16,
   kSHSpellOff = 32,
   kSHConceal = 64,
+  kSHConcealLines = 128,
 };
 
 typedef struct {
@@ -55,7 +64,7 @@ typedef struct {
   schar_T conceal_char;
 } DecorHighlightInline;
 
-#define DECOR_HIGHLIGHT_INLINE_INIT { 0, DECOR_PRIORITY_BASE, 0,  0 }
+#define DECOR_HIGHLIGHT_INLINE_INIT { 0, DECOR_PRIORITY_BASE, 0, 0 }
 
 typedef struct {
   uint16_t flags;
@@ -143,6 +152,7 @@ typedef struct {
   LuaRef redraw_end;
   LuaRef hl_def;
   LuaRef spell_nav;
+  LuaRef conceal_line;
   int hl_valid;
   bool hl_cached;
 

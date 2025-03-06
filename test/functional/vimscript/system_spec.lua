@@ -12,7 +12,6 @@ local command = n.command
 local insert = n.insert
 local expect = n.expect
 local exc_exec = n.exc_exec
-local os_kill = n.os_kill
 local pcall_err = t.pcall_err
 local is_os = t.is_os
 
@@ -132,7 +131,6 @@ describe('system()', function()
 
     before_each(function()
       screen = Screen.new()
-      screen:attach()
     end)
 
     if is_os('win') then
@@ -395,7 +393,7 @@ describe('system()', function()
   it("with a program that doesn't close stdout will exit properly after passing input", function()
     local out = eval(string.format("system('%s', 'clip-data')", testprg('streams-test')))
     assert(out:sub(0, 5) == 'pid: ', out)
-    os_kill(out:match('%d+'))
+    eq(0, vim.uv.kill(assert(tonumber(out:match('%d+'))), 'sigkill'))
   end)
 end)
 
@@ -430,11 +428,6 @@ describe('systemlist()', function()
 
     before_each(function()
       screen = Screen.new()
-      screen:attach()
-    end)
-
-    after_each(function()
-      screen:detach()
     end)
 
     it('`echo` and waits for its return', function()
@@ -544,7 +537,7 @@ describe('systemlist()', function()
   it("with a program that doesn't close stdout will exit properly after passing input", function()
     local out = eval(string.format("systemlist('%s', 'clip-data')", testprg('streams-test')))
     assert(out[1]:sub(0, 5) == 'pid: ', out)
-    os_kill(out[1]:match('%d+'))
+    eq(0, vim.uv.kill(assert(tonumber(out[1]:match('%d+'))), 'sigkill'))
   end)
 
   it('powershell w/ UTF-8 text #13713', function()
@@ -567,7 +560,6 @@ describe('shell :!', function()
 
   it(':{range}! with powershell filter/redirect #16271 #19250', function()
     local screen = Screen.new(500, 8)
-    screen:attach()
     local found = n.set_shell_powershell(true)
     insert([[
       3
@@ -598,7 +590,6 @@ describe('shell :!', function()
 
   it(':{range}! without redirecting to buffer', function()
     local screen = Screen.new(500, 10)
-    screen:attach()
     insert([[
       3
       1

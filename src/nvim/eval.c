@@ -126,7 +126,7 @@ bool *eval_lavars_used = NULL;
 #define SCRIPT_SV(id) (SCRIPT_ITEM(id)->sn_vars)
 #define SCRIPT_VARS(id) (SCRIPT_SV(id)->sv_dict.dv_hashtab)
 
-static int echo_attr = 0;   // attributes used for ":echo"
+static int echo_hl_id = 0;   // highlight id used for ":echo"
 
 /// Info used by a ":for" loop.
 typedef struct {
@@ -270,6 +270,7 @@ static struct vimvar {
   VV(VV_COLLATE,          "collate",          VAR_STRING, VV_RO),
   VV(VV_EXITING,          "exiting",          VAR_NUMBER, VV_RO),
   VV(VV_MAXCOL,           "maxcol",           VAR_NUMBER, VV_RO),
+  VV(VV_STACKTRACE,       "stacktrace",       VAR_LIST, VV_RO),
   // Neovim
   VV(VV_STDERR,           "stderr",           VAR_NUMBER, VV_RO),
   VV(VV_MSGPACK_TYPES,    "msgpack_types",    VAR_DICT, VV_RO),
@@ -758,7 +759,7 @@ void fill_evalarg_from_eap(evalarg_T *evalarg, exarg_T *eap, bool skip)
     return;
   }
 
-  if (getline_equal(eap->ea_getline, eap->cookie, getsourceline)) {
+  if (sourcing_a_script(eap)) {
     evalarg->eval_getline = eap->ea_getline;
     evalarg->eval_cookie = eap->cookie;
   }
@@ -922,13 +923,12 @@ int eval_expr_typval(const typval_T *expr, bool want_func, typval_T *argv, int a
 {
   if (expr->v_type == VAR_PARTIAL) {
     return eval_expr_partial(expr, argv, argc, rettv);
-  } else if (expr->v_type == VAR_FUNC || want_func) {
+  }
+  if (expr->v_type == VAR_FUNC || want_func) {
     return eval_expr_func(expr, argv, argc, rettv);
-  } else {
-    return eval_expr_string(expr, rettv);
   }
 
-  return OK;
+  return eval_expr_string(expr, rettv);
 }
 
 /// Like eval_to_bool() but using a typval_T instead of a string.
@@ -1368,7 +1368,7 @@ int eval_foldexpr(win_T *wp, int *cp)
   const bool use_sandbox = was_set_insecurely(wp, kOptFoldexpr, OPT_LOCAL);
 
   char *arg = skipwhite(wp->w_p_fde);
-  current_sctx = wp->w_p_script_ctx[WV_FDE].script_ctx;
+  current_sctx = wp->w_p_script_ctx[kWinOptFoldexpr];
 
   emsg_off++;
   if (use_sandbox) {
@@ -1982,7 +1982,7 @@ void set_var_lval(lval_T *lp, char *endp, typval_T *rettv, bool copy, const bool
 
       // handle +=, -=, *=, /=, %= and .=
       di = NULL;
-      if (eval_variable(lp->ll_name, (int)strlen(lp->ll_name),
+      if (eval_variable(lp->ll_name, (int)lp->ll_name_len,
                         &tv, &di, true, false) == OK) {
         if ((di == NULL
              || (!var_check_ro(di->di_flags, lp->ll_name, TV_CSTRING)
@@ -4115,10 +4115,10 @@ int eval_option(const char **const arg, typval_T *const rettv, const bool evalua
 {
   const bool working = (**arg == '+');  // has("+option")
   OptIndex opt_idx;
-  int scope;
+  int opt_flags;
 
   // Isolate the option name and find its value.
-  char *const option_end = (char *)find_option_var_end(arg, &opt_idx, &scope);
+  char *const option_end = (char *)find_option_var_end(arg, &opt_idx, &opt_flags);
 
   if (option_end == NULL) {
     if (rettv != NULL) {
@@ -4146,7 +4146,7 @@ int eval_option(const char **const arg, typval_T *const rettv, const bool evalua
 
     ret = FAIL;
   } else if (rettv != NULL) {
-    OptVal value = is_tty_opt ? get_tty_option(*arg) : get_option_value(opt_idx, scope);
+    OptVal value = is_tty_opt ? get_tty_option(*arg) : get_option_value(opt_idx, opt_flags);
     assert(value.type != kOptValTypeNil);
 
     *rettv = optval_as_tv(value, true);
@@ -6857,11 +6857,11 @@ static char *make_expanded_name(const char *in_start, char *expr_start, char *ex
 
   char *temp_result = eval_to_string(expr_start + 1, false, false);
   if (temp_result != NULL) {
-    retval = xmalloc(strlen(temp_result) + (size_t)(expr_start - in_start)
-                     + (size_t)(in_end - expr_end) + 1);
-    STRCPY(retval, in_start);
-    strcat(retval, temp_result);
-    strcat(retval, expr_end + 1);
+    size_t retvalsize = (size_t)(expr_start - in_start)
+                        + strlen(temp_result)
+                        + (size_t)(in_end - expr_end) + 1;
+    retval = xmalloc(retvalsize);
+    vim_snprintf(retval, retvalsize, "%s%s%s", in_start, temp_result, expr_end + 1);
   }
   xfree(temp_result);
 
@@ -7646,26 +7646,8 @@ hashtab_T *find_var_ht_dict(const char *name, const size_t name_len, const char 
                  || current_sctx.sc_sid == SID_LUA)
              && current_sctx.sc_sid <= script_items.ga_len) {
     // For anonymous scripts without a script item, create one now so script vars can be used
-    if (current_sctx.sc_sid == SID_LUA) {
-      // try to resolve lua filename & line no so it can be shown in lastset messages.
-      nlua_set_sctx(&current_sctx);
-      if (current_sctx.sc_sid != SID_LUA) {
-        // Great we have valid location. Now here this out we'll create a new
-        // script context with the name and lineno of this one. why ?
-        // for behavioral consistency. With this different anonymous exec from
-        // same file can't access each others script local stuff. We need to do
-        // this all other cases except this will act like that otherwise.
-        const LastSet last_set = (LastSet){
-          .script_ctx = current_sctx,
-          .channel_id = LUA_INTERNAL_CALL,
-        };
-        bool should_free;
-        // should_free is ignored as script_ctx will be resolved to a fname
-        // and new_script_item() will consume it.
-        char *sc_name = get_scriptname(last_set, &should_free);
-        new_script_item(sc_name, &current_sctx.sc_sid);
-      }
-    }
+    // Try to resolve lua filename & linenr so it can be shown in last-set messages.
+    nlua_set_sctx(&current_sctx);
     if (current_sctx.sc_sid == SID_STR || current_sctx.sc_sid == SID_LUA) {
       // Create SID if s: scope is accessed from Lua or anon Vimscript. #15994
       new_script_item(NULL, &current_sctx.sc_sid);
@@ -7876,12 +7858,12 @@ void ex_echo(exarg_T *eap)
           msg_start();
         }
       } else if (eap->cmdidx == CMD_echo) {
-        msg_puts_attr(" ", echo_attr);
+        msg_puts_hl(" ", echo_hl_id, false);
       }
       char *tofree = encode_tv2echo(&rettv, NULL);
       if (*tofree != NUL) {
         msg_ext_set_kind("echo");
-        msg_multiline(tofree, echo_attr, true, &need_clear);
+        msg_multiline(cstr_as_string(tofree), echo_hl_id, true, false, &need_clear);
       }
       xfree(tofree);
     }
@@ -7907,13 +7889,13 @@ void ex_echo(exarg_T *eap)
 /// ":echohl {name}".
 void ex_echohl(exarg_T *eap)
 {
-  echo_attr = syn_name2attr(eap->arg);
+  echo_hl_id = syn_name2id(eap->arg);
 }
 
-/// Returns the :echo attribute
-int get_echo_attr(void)
+/// Returns the :echo highlight id
+int get_echo_hl_id(void)
 {
-  return echo_attr;
+  return echo_hl_id;
 }
 
 /// ":execute expr1 ..." execute the result of an expression.
@@ -7964,12 +7946,11 @@ void ex_execute(exarg_T *eap)
   if (ret != FAIL && ga.ga_data != NULL) {
     if (eap->cmdidx == CMD_echomsg) {
       msg_ext_set_kind("echomsg");
-      msg(ga.ga_data, echo_attr);
+      msg(ga.ga_data, echo_hl_id);
     } else if (eap->cmdidx == CMD_echoerr) {
       // We don't want to abort following commands, restore did_emsg.
       int save_did_emsg = did_emsg;
-      msg_ext_set_kind("echoerr");
-      emsg_multiline(ga.ga_data, true);
+      emsg_multiline(ga.ga_data, "echoerr", HLF_E, true);
       if (!force_abort) {
         did_emsg = save_did_emsg;
       }
@@ -7989,24 +7970,25 @@ void ex_execute(exarg_T *eap)
 
 /// Skip over the name of an option variable: "&option", "&g:option" or "&l:option".
 ///
-/// @param[in,out]  arg       Points to the "&" or '+' when called, to "option" when returning.
-/// @param[out]     opt_idxp  Set to option index in options[] table.
-/// @param[out]     scope     Set to option scope.
+/// @param[in,out]  arg        Points to the "&" or '+' when called, to "option" when returning.
+/// @param[out]     opt_idxp   Set to option index in options[] table.
+/// @param[out]     opt_flags  Option flags.
 ///
 /// @return NULL when no option name found. Otherwise pointer to the char after the option name.
-const char *find_option_var_end(const char **const arg, OptIndex *const opt_idxp, int *const scope)
+const char *find_option_var_end(const char **const arg, OptIndex *const opt_idxp,
+                                int *const opt_flags)
 {
   const char *p = *arg;
 
   p++;
   if (*p == 'g' && p[1] == ':') {
-    *scope = OPT_GLOBAL;
+    *opt_flags = OPT_GLOBAL;
     p += 2;
   } else if (*p == 'l' && p[1] == ':') {
-    *scope = OPT_LOCAL;
+    *opt_flags = OPT_LOCAL;
     p += 2;
   } else {
-    *scope = 0;
+    *opt_flags = 0;
   }
 
   const char *end = find_option_end(p, opt_idxp);
@@ -8043,31 +8025,21 @@ void var_set_global(const char *const name, typval_T vartv)
 /// Should only be invoked when 'verbose' is non-zero.
 void last_set_msg(sctx_T script_ctx)
 {
-  const LastSet last_set = (LastSet){
-    .script_ctx = script_ctx,
-    .channel_id = 0,
-  };
-  option_last_set_msg(last_set);
-}
-
-/// Displays where an option was last set.
-///
-/// Should only be invoked when 'verbose' is non-zero.
-void option_last_set_msg(LastSet last_set)
-{
-  if (last_set.script_ctx.sc_sid == 0) {
+  if (script_ctx.sc_sid == 0) {
     return;
   }
 
   bool should_free;
-  char *p = get_scriptname(last_set, &should_free);
+  char *p = get_scriptname(script_ctx, &should_free);
 
   verbose_enter();
   msg_puts(_("\n\tLast set from "));
   msg_puts(p);
-  if (last_set.script_ctx.sc_lnum > 0) {
+  if (script_ctx.sc_lnum > 0) {
     msg_puts(_(line_msg));
-    msg_outnum(last_set.script_ctx.sc_lnum);
+    msg_outnum(script_ctx.sc_lnum);
+  } else if (script_is_lua(script_ctx.sc_sid)) {
+    msg_puts(_(" (run Nvim with -V1 for more details)"));
   }
   if (should_free) {
     xfree(p);
@@ -8350,9 +8322,10 @@ repeat:
           char *const sub = xmemdupz(s, (size_t)(p - s));
           char *const str = xmemdupz(*fnamep, *fnamelen);
           *usedlen = (size_t)(p + 1 - src);
-          s = do_string_sub(str, pat, sub, NULL, flags);
+          size_t slen;
+          s = do_string_sub(str, *fnamelen, pat, sub, NULL, flags, &slen);
           *fnamep = s;
-          *fnamelen = strlen(s);
+          *fnamelen = slen;
           xfree(*bufp);
           *bufp = s;
           didit = true;
@@ -8391,12 +8364,14 @@ repeat:
 /// When "sub" is NULL "expr" is used, must be a VAR_FUNC or VAR_PARTIAL.
 /// "flags" can be "g" to do a global substitute.
 ///
+/// @param ret_len  length of returned buffer
+///
 /// @return  an allocated string, NULL for error.
-char *do_string_sub(char *str, char *pat, char *sub, typval_T *expr, const char *flags)
+char *do_string_sub(char *str, size_t len, char *pat, char *sub, typval_T *expr, const char *flags,
+                    size_t *ret_len)
 {
   regmatch_T regmatch;
   garray_T ga;
-  char *zero_width = NULL;
 
   // Make 'cpoptions' empty, so that the 'l' flag doesn't work here
   char *save_cpo = p_cpo;
@@ -8404,14 +8379,15 @@ char *do_string_sub(char *str, char *pat, char *sub, typval_T *expr, const char 
 
   ga_init(&ga, 1, 200);
 
-  int do_all = (flags[0] == 'g');
-
   regmatch.rm_ic = p_ic;
   regmatch.regprog = vim_regcomp(pat, RE_MAGIC + RE_STRING);
   if (regmatch.regprog != NULL) {
-    int sublen;
     char *tail = str;
-    char *end = str + strlen(str);
+    char *end = str + len;
+    bool do_all = (flags[0] == 'g');
+    int sublen;
+    char *zero_width = NULL;
+
     while (vim_regexec_nl(&regmatch, str, (colnr_T)(tail - str))) {
       // Skip empty match except for first match.
       if (regmatch.startp[0] == regmatch.endp[0]) {
@@ -8458,12 +8434,17 @@ char *do_string_sub(char *str, char *pat, char *sub, typval_T *expr, const char 
 
     if (ga.ga_data != NULL) {
       STRCPY((char *)ga.ga_data + ga.ga_len, tail);
+      ga.ga_len += (int)(end - tail);
     }
 
     vim_regfree(regmatch.regprog);
   }
 
-  char *ret = xstrdup(ga.ga_data == NULL ? str : ga.ga_data);
+  if (ga.ga_data != NULL) {
+    str = ga.ga_data;
+    len = (size_t)ga.ga_len;
+  }
+  char *ret = xstrnsave(str, len);
   ga_clear(&ga);
   if (p_cpo == empty_string_option) {
     p_cpo = save_cpo;
@@ -8477,10 +8458,14 @@ char *do_string_sub(char *str, char *pat, char *sub, typval_T *expr, const char 
     free_string_option(save_cpo);
   }
 
+  if (ret_len != NULL) {
+    *ret_len = len;
+  }
+
   return ret;
 }
 
-/// common code for getting job callbacks for jobstart, termopen and rpcstart
+/// Common code for getting job callbacks for `jobstart`.
 ///
 /// @return true/false on success/failure.
 bool common_job_callbacks(dict_T *vopts, CallbackReader *on_stdout, CallbackReader *on_stderr,
@@ -8616,7 +8601,7 @@ bool eval_has_provider(const char *feat, bool throw_if_fast)
   }
 
   if (throw_if_fast && !nlua_is_deferred_safe()) {
-    semsg(e_luv_api_disabled, "Vimscript function");
+    semsg(e_fast_api_disabled, "Vimscript function");
     return false;
   }
 

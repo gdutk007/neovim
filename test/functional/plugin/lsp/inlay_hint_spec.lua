@@ -67,7 +67,6 @@ int main() {
   before_each(function()
     clear_notrace()
     screen = Screen.new(50, 9)
-    screen:attach()
 
     bufnr = n.api.nvim_get_current_buf()
     exec_lua(create_server_definition)
@@ -317,13 +316,13 @@ test text
 
   local grid_without_inlay_hints = [[
   test text                                         |
-   ^                                                 |
+  ^                                                  |
                                                     |
 ]]
 
   local grid_with_inlay_hints = [[
   {1:01234}test text                                    |
-   ^                                                 |
+  ^                                                  |
                                                     |
 ]]
 
@@ -339,7 +338,6 @@ test text
   before_each(function()
     clear_notrace()
     screen = Screen.new(50, 3)
-    screen:attach()
 
     exec_lua(create_server_definition)
     bufnr = n.api.nvim_get_current_buf()

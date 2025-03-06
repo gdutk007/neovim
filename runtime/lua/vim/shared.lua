@@ -7,8 +7,7 @@
 -- so this wouldn't be a separate case to consider)
 
 ---@nodoc
----@diagnostic disable-next-line: lowercase-global
-vim = vim or {}
+_G.vim = _G.vim or {} --[[@as table]] -- TODO(lewis6991): better fix for flaky luals
 
 ---@generic T
 ---@param orig T
@@ -527,15 +526,15 @@ end
 ---@param ... any Optional keys (0 or more, variadic) via which to index the table
 ---@return any # Nested value indexed by key (if it exists), else nil
 function vim.tbl_get(o, ...)
-  local keys = { ... }
-  if #keys == 0 then
+  local nargs = select('#', ...)
+  if nargs == 0 then
     return nil
   end
-  for i, k in ipairs(keys) do
-    o = o[k] --- @type any
+  for i = 1, nargs do
+    o = o[select(i, ...)] --- @type any
     if o == nil then
       return nil
-    elseif type(o) ~= 'table' and next(keys, i) then
+    elseif type(o) ~= 'table' and i ~= nargs then
       return nil
     end
   end
@@ -737,6 +736,51 @@ function vim.list_slice(list, start, finish)
   return new_list
 end
 
+--- Efficiently insert items into the middle of a list.
+---
+--- Calling table.insert() in a loop will re-index the tail of the table on
+--- every iteration, instead this function will re-index  the table exactly
+--- once.
+---
+--- Based on https://stackoverflow.com/questions/12394841/safely-remove-items-from-an-array-table-while-iterating/53038524#53038524
+---
+---@param t any[]
+---@param first integer
+---@param last integer
+---@param v any
+function vim._list_insert(t, first, last, v)
+  local n = #t
+
+  -- Shift table forward
+  for i = n - first, 0, -1 do
+    t[last + 1 + i] = t[first + i]
+  end
+
+  -- Fill in new values
+  for i = first, last do
+    t[i] = v
+  end
+end
+
+--- Efficiently remove items from middle of a list.
+---
+--- Calling table.remove() in a loop will re-index the tail of the table on
+--- every iteration, instead this function will re-index  the table exactly
+--- once.
+---
+--- Based on https://stackoverflow.com/questions/12394841/safely-remove-items-from-an-array-table-while-iterating/53038524#53038524
+---
+---@param t any[]
+---@param first integer
+---@param last integer
+function vim._list_remove(t, first, last)
+  local n = #t
+  for i = 0, n - first do
+    t[first + i] = t[last + 1 + i]
+    t[last + 1 + i] = nil
+  end
+end
+
 --- Trim whitespace (Lua pattern "%s") from both sides of a string.
 ---
 ---@see |lua-patterns|
@@ -914,7 +958,7 @@ do
   ---       function vim.startswith(s, prefix)
   ---         vim.validate('s', s, 'string')
   ---         vim.validate('prefix', prefix, 'string')
-  ---         ...
+  ---         -- ...
   ---       end
   ---     ```
   ---
@@ -934,7 +978,7 @@ do
   ---           age={age, 'number'},
   ---           hobbies={hobbies, 'table'},
   ---         }
-  ---         ...
+  ---         -- ...
   ---       end
   ---     ```
   ---
@@ -968,7 +1012,7 @@ do
   --- best performance.
   ---
   --- @param name string Argument name
-  --- @param value string Argument value
+  --- @param value any Argument value
   --- @param validator vim.validate.Validator
   ---   - (`string|string[]`): Any value that can be returned from |lua-type()| in addition to
   ---     `'callable'`: `'boolean'`, `'callable'`, `'function'`, `'nil'`, `'number'`, `'string'`, `'table'`,
@@ -1142,7 +1186,7 @@ end
 --- @param mod T
 --- @return T
 function vim._defer_require(root, mod)
-  return setmetatable({}, {
+  return setmetatable({ _submodules = mod }, {
     ---@param t table<string, any>
     ---@param k string
     __index = function(t, k)
@@ -1352,6 +1396,26 @@ function vim._with(context, f)
   end
 
   return vim._with_c(context, callback)
+end
+
+--- @param bufnr? integer
+--- @return integer
+function vim._resolve_bufnr(bufnr)
+  if bufnr == nil or bufnr == 0 then
+    return vim.api.nvim_get_current_buf()
+  end
+  vim.validate('bufnr', bufnr, 'number')
+  return bufnr
+end
+
+--- @generic T
+--- @param x elem_or_list<T>?
+--- @return T[]
+function vim._ensure_list(x)
+  if type(x) == 'table' then
+    return x
+  end
+  return { x }
 end
 
 return vim
