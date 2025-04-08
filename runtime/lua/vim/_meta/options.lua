@@ -799,6 +799,20 @@ vim.o.ccv = vim.o.charconvert
 vim.go.charconvert = vim.o.charconvert
 vim.go.ccv = vim.go.charconvert
 
+--- Number of quickfix lists that should be remembered for the quickfix
+--- stack.  Must be between 1 and 100.  If the option is set to a value
+--- that is lower than the amount of entries in the quickfix list stack,
+--- entries will be removed starting from the oldest one.  If the current
+--- quickfix list was removed, then the quickfix list at top of the stack
+--- (the most recently created) will be used in its place.  For additional
+--- info, see `quickfix-stack`.
+---
+--- @type integer
+vim.o.chistory = 10
+vim.o.chi = vim.o.chistory
+vim.go.chistory = vim.o.chistory
+vim.go.chi = vim.go.chistory
+
 --- Enables automatic C program indenting.  See 'cinkeys' to set the keys
 --- that trigger reindenting in insert mode and 'cinoptions' to set your
 --- preferred indent style.
@@ -1044,6 +1058,31 @@ vim.o.cfu = vim.o.completefunc
 vim.bo.completefunc = vim.o.completefunc
 vim.bo.cfu = vim.bo.completefunc
 
+--- A comma-separated list of strings to enable fuzzy collection for
+--- specific `ins-completion` modes, affecting how matches are gathered
+--- during completion.  For specified modes, fuzzy matching is used to
+--- find completion candidates instead of the standard prefix-based
+--- matching.  This option can contain the following values:
+---
+--- keyword		keywords in the current file	`i_CTRL-X_CTRL-N`
+--- 		keywords with flags ".", "w",	`i_CTRL-N` `i_CTRL-P`
+--- 		"b", "u", "U" and "k{dict}" in 'complete'
+--- 		keywords in 'dictionary'	`i_CTRL-X_CTRL-K`
+---
+--- files		file names			`i_CTRL-X_CTRL-F`
+---
+--- whole_line	whole lines			`i_CTRL-X_CTRL-L`
+---
+--- When using the 'completeopt' "longest" option value, fuzzy collection
+--- can identify the longest common string among the best fuzzy matches
+--- and insert it automatically.
+---
+--- @type string
+vim.o.completefuzzycollect = ""
+vim.o.cfc = vim.o.completefuzzycollect
+vim.go.completefuzzycollect = vim.o.completefuzzycollect
+vim.go.cfc = vim.go.completefuzzycollect
+
 --- A comma-separated list of strings that controls the alignment and
 --- display order of items in the popup menu during Insert mode
 --- completion.  The supported values are "abbr", "kind", and "menu".
@@ -1063,10 +1102,12 @@ vim.go.cia = vim.go.completeitemalign
 ---    fuzzy    Enable `fuzzy-matching` for completion candidates. This
 --- 	    allows for more flexible and intuitive matching, where
 --- 	    characters can be skipped and matches can be found even
---- 	    if the exact sequence is not typed.  Only makes a
---- 	    difference how completion candidates are reduced from the
---- 	    list of alternatives, but not how the candidates are
---- 	    collected (using different completion types).
+--- 	    if the exact sequence is not typed.  Note: This option
+--- 	    does not affect the collection of candidate list, it only
+--- 	    controls how completion candidates are reduced from the
+--- 	    list of alternatives.  If you want to use `fuzzy-matching`
+--- 	    to gather more alternatives for your candidate list,
+--- 	    see `'completefuzzycollect'`.
 ---
 ---    longest  Only insert the longest common text of the matches.  If
 --- 	    the menu is displayed you can use CTRL-L to add more
@@ -1109,7 +1150,7 @@ vim.go.cia = vim.go.completeitemalign
 --- 	    combination with "menu" or "menuone".
 ---
 --- @type string
-vim.o.completeopt = "menu,preview"
+vim.o.completeopt = "menu,popup"
 vim.o.cot = vim.o.completeopt
 vim.bo.completeopt = vim.o.completeopt
 vim.bo.cot = vim.bo.completeopt
@@ -1689,6 +1730,24 @@ vim.go.dex = vim.go.diffexpr
 --- 			Use the indent heuristic for the internal
 --- 			diff library.
 ---
+--- 	inline:{text}	Highlight inline differences within a change.
+--- 			See `view-diffs`.  Supported values are:
+---
+--- 			none    Do not perform inline highlighting.
+--- 			simple  Highlight from first different
+--- 				character to the last one in each
+--- 				line.  This is the default if no
+--- 				`inline:` value is set.
+--- 			char    Use internal diff to perform a
+--- 				character-wise diff and highlight the
+--- 				difference.
+--- 			word    Use internal diff to perform a
+--- 				`word`-wise diff and highlight the
+--- 				difference.  Non-alphanumeric
+--- 				multi-byte characters such as emoji
+--- 				and CJK characters are considered
+--- 				individual words.
+---
 --- 	internal	Use the internal diff library.  This is
 --- 			ignored when 'diffexpr' is set.  *E960*
 --- 			When running out of memory when writing a
@@ -1739,7 +1798,7 @@ vim.go.dex = vim.go.diffexpr
 ---
 ---
 --- @type string
-vim.o.diffopt = "internal,filler,closeoff,linematch:40"
+vim.o.diffopt = "internal,filler,closeoff,inline:simple,linematch:40"
 vim.o.dip = vim.o.diffopt
 vim.go.diffopt = vim.o.diffopt
 vim.go.dip = vim.go.diffopt
@@ -2010,9 +2069,10 @@ vim.o.et = vim.o.expandtab
 vim.bo.expandtab = vim.o.expandtab
 vim.bo.et = vim.bo.expandtab
 
---- Automatically execute .nvim.lua, .nvimrc, and .exrc files in the
---- current directory, if the file is in the `trust` list. Use `:trust` to
---- manage trusted files. See also `vim.secure.read()`.
+--- Enables project-local configuration. Nvim will execute any .nvim.lua,
+--- .nvimrc, or .exrc file found in the `current-directory`, if the file is
+--- in the `trust` list. Use `:trust` to manage trusted files. See also
+--- `vim.secure.read()`.
 ---
 --- Compare 'exrc' to `editorconfig`:
 --- - 'exrc' can execute any code; editorconfig only specifies settings.
@@ -3684,6 +3744,20 @@ vim.o.lz = vim.o.lazyredraw
 vim.go.lazyredraw = vim.o.lazyredraw
 vim.go.lz = vim.go.lazyredraw
 
+--- Like 'chistory', but for the location list stack associated with the
+--- current window.  If the option is changed in either the location list
+--- window itself or the the window that is associated with the location
+--- list stack, the new value will also be applied to the other one.  This
+--- means this value will always be the same for a given location list
+--- window and its corresponding window.  See `quickfix-stack` for
+--- additional info.
+---
+--- @type integer
+vim.o.lhistory = 10
+vim.o.lhi = vim.o.lhistory
+vim.wo.lhistory = vim.o.lhistory
+vim.wo.lhi = vim.wo.lhistory
+
 --- If on, Vim will wrap long lines at a character in 'breakat' rather
 --- than at the last character that fits on the screen.  Unlike
 --- 'wrapmargin' and 'textwidth', this does not insert <EOL>s in the file,
@@ -4640,7 +4714,7 @@ vim.go.pm = vim.go.patchmode
 --- ```
 --- - A directory name may end in a ':' or '/'.
 --- - Environment variables are expanded `:set_env`.
---- - When using `netrw.vim` URLs can be used.  For example, adding
+--- - When using `netrw` URLs can be used.  For example, adding
 ---   "https://www.vim.org" will make ":find index.html" work.
 --- - Search upwards and downwards in a directory tree using "*", "**" and
 ---   ";".  See `file-searching` for info and syntax.
@@ -4758,6 +4832,17 @@ vim.o.pumheight = 0
 vim.o.ph = vim.o.pumheight
 vim.go.pumheight = vim.o.pumheight
 vim.go.ph = vim.go.pumheight
+
+--- Maximum width for the popup menu (`ins-completion-menu`).  When zero,
+--- there is no maximum width limit, otherwise the popup menu will never be
+--- wider than this value.  Truncated text will be indicated by "..." at the
+--- end.  Takes precedence over 'pumwidth'.
+---
+--- @type integer
+vim.o.pummaxwidth = 0
+vim.o.pmw = vim.o.pummaxwidth
+vim.go.pummaxwidth = vim.o.pummaxwidth
+vim.go.pmw = vim.go.pummaxwidth
 
 --- Minimum width for the popup menu (`ins-completion-menu`).  If the
 --- cursor column + 'pumwidth' exceeds screen width, the popup menu is
@@ -6069,11 +6154,10 @@ vim.bo.spc = vim.bo.spellcapcheck
 --- It may also be a comma-separated list of names.  A count before the
 --- `zg` and `zw` commands can be used to access each.  This allows using
 --- a personal word list file and a project word list file.
---- When a word is added while this option is empty Vim will set it for
---- you: Using the first directory in 'runtimepath' that is writable.  If
---- there is no "spell" directory yet it will be created.  For the file
---- name the first language name that appears in 'spelllang' is used,
---- ignoring the region.
+--- When a word is added while this option is empty Nvim will use
+--- (and auto-create) `stdpath('data')/spell/`. For the file name the
+--- first language name that appears in 'spelllang' is used, ignoring the
+--- region.
 --- The resulting ".spl" file will be used for spell checking, it does not
 --- have to appear in 'spelllang'.
 --- Normally one file is used for all regions, but you can add the region
@@ -7830,6 +7914,20 @@ vim.o.winblend = 0
 vim.o.winbl = vim.o.winblend
 vim.wo.winblend = vim.o.winblend
 vim.wo.winbl = vim.wo.winblend
+
+--- Defines the default border style of floating windows. The default value
+--- is empty, which is equivalent to "none". Valid values include:
+--- - "bold": Bold line box.
+--- - "double": Double-line box.
+--- - "none": No border.
+--- - "rounded": Like "single", but with rounded corners ("╭" etc.).
+--- - "shadow": Drop shadow effect, by blending with the background.
+--- - "single": Single-line box.
+--- - "solid": Adds padding by a single whitespace cell.
+---
+--- @type ''|'double'|'single'|'shadow'|'rounded'|'solid'|'bold'|'none'
+vim.o.winborder = ""
+vim.go.winborder = vim.o.winborder
 
 --- Window height used for `CTRL-F` and `CTRL-B` when there is only one
 --- window and the value is smaller than 'lines' minus one.  The screen

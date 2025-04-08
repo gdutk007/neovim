@@ -213,6 +213,7 @@ func s:GetFilenameChecks() abort
     \ 'dafny': ['file.dfy'],
     \ 'dart': ['file.dart', 'file.drt'],
     \ 'datascript': ['file.ds'],
+    \ 'dax': ['file.dax'],
     \ 'dcd': ['file.dcd'],
     \ 'deb822sources': ['/etc/apt/sources.list.d/file.sources', 'any/etc/apt/sources.list.d/file.sources'],
     \ 'debchangelog': ['changelog.Debian', 'changelog.dch', 'NEWS.Debian', 'NEWS.dch', '/debian/changelog'],
@@ -306,7 +307,7 @@ func s:GetFilenameChecks() abort
     \ 'gitattributes': ['file.git/info/attributes', '.gitattributes', '/.config/git/attributes', '/etc/gitattributes', '/usr/local/etc/gitattributes', 'some.git/info/attributes'] + s:WhenConfigHome('$XDG_CONFIG_HOME/git/attributes'),
     \ 'gitcommit': ['COMMIT_EDITMSG', 'MERGE_MSG', 'TAG_EDITMSG', 'NOTES_EDITMSG', 'EDIT_DESCRIPTION'],
     \ 'gitconfig': ['file.git/config', 'file.git/config.worktree', 'file.git/worktrees/x/config.worktree', '.gitconfig', '.gitmodules', 'file.git/modules//config', '/.config/git/config', '/etc/gitconfig', '/usr/local/etc/gitconfig', '/etc/gitconfig.d/file', 'any/etc/gitconfig.d/file', '/.gitconfig.d/file', 'any/.config/git/config', 'any/.gitconfig.d/file', 'some.git/config', 'some.git/modules/any/config'] + s:WhenConfigHome('$XDG_CONFIG_HOME/git/config'),
-    \ 'gitignore': ['file.git/info/exclude', '.gitignore', '/.config/git/ignore', 'some.git/info/exclude'] + s:WhenConfigHome('$XDG_CONFIG_HOME/git/ignore') + ['.prettierignore', '.fdignore', '/.config/fd/ignore', '.ignore', '.rgignore', '.dockerignore', '.npmignore', '.vscodeignore'],
+    \ 'gitignore': ['file.git/info/exclude', '.gitignore', '/.config/git/ignore', 'some.git/info/exclude'] + s:WhenConfigHome('$XDG_CONFIG_HOME/git/ignore') + ['.prettierignore', '.fdignore', '/.config/fd/ignore', '.ignore', '.rgignore', '.dockerignore', '.containerignore', '.npmignore', '.vscodeignore'],
     \ 'gitolite': ['gitolite.conf', '/gitolite-admin/conf/file', 'any/gitolite-admin/conf/file'],
     \ 'gitrebase': ['git-rebase-todo'],
     \ 'gitsendemail': ['.gitsendemail.msg.xxxxxx'],
@@ -605,6 +606,7 @@ func s:GetFilenameChecks() abort
     \ 'povini': ['.povrayrc'],
     \ 'ppd': ['file.ppd'],
     \ 'ppwiz': ['file.it', 'file.ih'],
+    \ 'pq': ['file.pq'],
     \ 'prisma': ['file.prisma'],
     \ 'privoxy': ['file.action'],
     \ 'proc': ['file.pc'],
@@ -719,6 +721,8 @@ func s:GetFilenameChecks() abort
     \ 'snobol4': ['file.sno', 'file.spt'],
     \ 'solidity': ['file.sol'],
     \ 'solution': ['file.sln'],
+    \ 'spajson': ['any/pipewire/file.conf', 'any/pipewire/file.conf.d/other.conf',
+    \             'any/wireplumber/file.conf', 'any/wireplumber/file.conf.d/other.conf'],
     \ 'sparql': ['file.rq', 'file.sparql'],
     \ 'spec': ['file.spec'],
     \ 'spice': ['file.sp', 'file.spice'],
@@ -801,6 +805,7 @@ func s:GetFilenameChecks() abort
     \ 'teal': ['file.tl'],
     \ 'templ': ['file.templ'],
     \ 'template': ['file.tmpl'],
+    \ 'tera': ['file.tera', 'file.toml.tera', 'file.html.tera', 'file.css.tera'],
     \ 'teraterm': ['file.ttl'],
     \ 'terminfo': ['file.ti'],
     \ 'terraform-vars': ['file.tfvars'],
@@ -815,7 +820,11 @@ func s:GetFilenameChecks() abort
     \ 'tla': ['file.tla'],
     \ 'tli': ['file.tli'],
     \ 'tmux': ['tmuxfile.conf', '.tmuxfile.conf', '.tmux-file.conf', '.tmux.conf', 'tmux-file.conf', 'tmux.conf', 'tmux.conf.local'],
-    \ 'toml': ['file.toml', 'Gopkg.lock', 'Pipfile', '/home/user/.cargo/config', '.black'],
+    \ 'toml': ['file.toml', 'uv.lock', 'Gopkg.lock', 'Pipfile', '/home/user/.cargo/config', '.black',
+    \          'any/containers/containers.conf', 'any/containers/containers.conf.d/file.conf',
+    \          'any/containers/containers.conf.modules/file.conf', 'any/containers/containers.conf.modules/any/file.conf',
+    \          'any/containers/registries.conf', 'any/containers/registries.conf.d/file.conf',
+    \          'any/containers/storage.conf'],
     \ 'tpp': ['file.tpp'],
     \ 'trace32': ['file.cmm', 'file.cmmt', 'file.t32'],
     \ 'treetop': ['file.treetop'],
@@ -915,8 +924,6 @@ func s:GetFilenameChecks() abort
     \         '.zcompdump', '.zlogin', '.zlogout', '.zshenv', '.zshrc', '.zsh_history',
     \         '.zcompdump-file', '.zlog', '.zlog-file', '.zsh', '.zsh-file',
     \         'any/etc/zprofile', 'zlog', 'zlog-file', 'zsh', 'zsh-file'],
-    \
-    \ 'help': [$VIMRUNTIME .. '/doc/help.txt'],
     \ }
 endfunc
 
@@ -931,6 +938,9 @@ func CheckItems(checks)
   set noswapfile
   for [ft, names] in items(a:checks)
     for i in range(0, len(names) - 1)
+      if isdirectory(fnameescape(names[i]))
+        continue
+      endif
       new
       try
         exe 'edit ' .. fnameescape(names[i])
@@ -1617,6 +1627,52 @@ func Test_haredoc_file()
   unlet g:haredoc_search_depth
 
   filetype off
+endfunc
+
+func Test_help_file()
+  func! s:Check_help_with_iskeyword(fname)
+    exe 'split' a:fname
+    call assert_equal('help', &filetype)
+    bwipe!
+    set iskeyword+=:
+    exe 'split' a:fname
+    call assert_equal('help', &filetype)
+    bwipe!
+    set iskeyword&
+  endfunc
+
+  set nomodeline
+  filetype on
+  call assert_true(mkdir('doc', 'pR'))
+
+  call writefile(['some text', 'vim:ft=help:'], 'doc/help.txt', 'D')
+  call s:Check_help_with_iskeyword('doc/help.txt')
+
+  call writefile(['some text', 'Copyright: |manual-copyright| vim:ft=help:'],
+        \ 'doc/help1.txt', 'D')
+  call s:Check_help_with_iskeyword('doc/help1.txt')
+
+  call writefile(['some text', 'vim:noet:ft=help:'], 'doc/help2.txt', 'D')
+  call s:Check_help_with_iskeyword('doc/help2.txt')
+
+  call writefile(['some text', 'vim: noet ft=help'], 'doc/help3.txt', 'D')
+  call s:Check_help_with_iskeyword('doc/help3.txt')
+
+  call writefile(['some text', 'vim: ft=help noet'], 'doc/help4.txt', 'D')
+  call s:Check_help_with_iskeyword('doc/help4.txt')
+
+  call writefile(['some text'], 'doc/nothelp.txt', 'D')
+  split doc/nothelp.txt
+  call assert_notequal('help', &filetype)
+  bwipe!
+
+  call writefile(['some text', '`vim:ft=help`'], 'doc/nothelp1.txt', 'D')
+  split doc/nothelp1.txt
+  call assert_notequal('help', &filetype)
+  bwipe!
+
+  filetype off
+  set modeline&
 endfunc
 
 func Test_hook_file()

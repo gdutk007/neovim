@@ -109,7 +109,7 @@ local s_output = {} ---@type string[]
 
 -- From a path return a list [{name}, {func}, {type}] representing a healthcheck
 local function filepath_to_healthcheck(path)
-  path = vim.fs.normalize(path)
+  path = vim.fs.abspath(vim.fs.normalize(path))
   local name --- @type string
   local func --- @type string
   local filetype --- @type string
@@ -118,7 +118,17 @@ local function filepath_to_healthcheck(path)
     func = 'health#' .. name .. '#check'
     filetype = 'v'
   else
-    local subpath = path:gsub('.*/lua/', '')
+    local rtp_lua = vim
+      .iter(vim.api.nvim_get_runtime_file('lua/', true))
+      :map(function(rtp_lua)
+        return vim.fs.abspath(vim.fs.normalize(rtp_lua))
+      end)
+      :find(function(rtp_lua)
+        return vim.fs.relpath(rtp_lua, path)
+      end)
+    -- "/path/to/rtp/lua/foo/bar/health.lua" => "foo/bar/health.lua"
+    -- "/another/rtp/lua/baz/health/init.lua" => "baz/health/init.lua"
+    local subpath = path:gsub('^' .. vim.pesc(rtp_lua), ''):gsub('^/+', '')
     if vim.fs.basename(subpath) == 'health.lua' then
       -- */health.lua
       name = vim.fs.dirname(subpath)
@@ -265,7 +275,7 @@ end
 ---
 --- @param msg string
 function M.ok(msg)
-  local input = format_report_message('OK', msg)
+  local input = format_report_message('✅ OK', msg)
   collect_output(input)
 end
 
@@ -274,7 +284,7 @@ end
 --- @param msg string
 --- @param ... string|string[] Optional advice
 function M.warn(msg, ...)
-  local input = format_report_message('WARNING', msg, ...)
+  local input = format_report_message('⚠️ WARNING', msg, ...)
   collect_output(input)
 end
 
@@ -283,7 +293,7 @@ end
 --- @param msg string
 --- @param ... string|string[] Optional advice
 function M.error(msg, ...)
-  local input = format_report_message('ERROR', msg, ...)
+  local input = format_report_message('❌ ERROR', msg, ...)
   collect_output(input)
 end
 
@@ -439,11 +449,15 @@ function M._check(mods, plugin_names)
   vim.print('')
 
   -- Quit with 'q' inside healthcheck buffers.
-  vim.keymap.set('n', 'q', function()
-    if not pcall(vim.cmd.close) then
-      vim.cmd.bdelete()
+  vim._with({ buf = bufnr }, function()
+    if vim.fn.maparg('q', 'n', false, false) == '' then
+      vim.keymap.set('n', 'q', function()
+        if not pcall(vim.cmd.close) then
+          vim.cmd.bdelete()
+        end
+      end, { buffer = bufnr, silent = true, noremap = true, nowait = true })
     end
-  end, { buffer = bufnr, silent = true, noremap = true, nowait = true })
+  end)
 
   -- Once we're done writing checks, set nomodifiable.
   vim.bo[bufnr].modifiable = false

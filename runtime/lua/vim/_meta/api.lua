@@ -9,19 +9,16 @@ error('Cannot require a meta file')
 
 vim.api = {}
 
---- @private
 --- @param buffer integer
 --- @param keys boolean
 --- @param dot boolean
 --- @return string
 function vim.api.nvim__buf_debug_extmarks(buffer, keys, dot) end
 
---- @private
 --- @param buffer integer
 --- @return table<string,any>
 function vim.api.nvim__buf_stats(buffer) end
 
---- @private
 --- EXPERIMENTAL: this API may change in the future.
 ---
 --- Sets info for the completion item at the given index. If the info text was shown in a window,
@@ -35,11 +32,9 @@ function vim.api.nvim__buf_stats(buffer) end
 --- - bufnr: (number) buffer id in floating window
 function vim.api.nvim__complete_set(index, opts) end
 
---- @private
 --- @return string
 function vim.api.nvim__get_lib_dir() end
 
---- @private
 --- Find files in runtime directories
 ---
 --- @param pat any[] pattern of files to search for
@@ -48,7 +43,6 @@ function vim.api.nvim__get_lib_dir() end
 --- @return string[] # list of absolute paths to the found files
 function vim.api.nvim__get_runtime(pat, all, opts) end
 
---- @private
 --- Returns object given as argument.
 ---
 --- This API function is used for testing. One should not rely on its presence
@@ -58,7 +52,6 @@ function vim.api.nvim__get_runtime(pat, all, opts) end
 --- @return any # its argument.
 function vim.api.nvim__id(obj) end
 
---- @private
 --- Returns array given as argument.
 ---
 --- This API function is used for testing. One should not rely on its presence
@@ -68,7 +61,6 @@ function vim.api.nvim__id(obj) end
 --- @return any[] # its argument.
 function vim.api.nvim__id_array(arr) end
 
---- @private
 --- Returns dict given as argument.
 ---
 --- This API function is used for testing. One should not rely on its presence
@@ -78,7 +70,6 @@ function vim.api.nvim__id_array(arr) end
 --- @return table<string,any> # its argument.
 function vim.api.nvim__id_dict(dct) end
 
---- @private
 --- Returns floating-point value given as argument.
 ---
 --- This API function is used for testing. One should not rely on its presence
@@ -88,7 +79,6 @@ function vim.api.nvim__id_dict(dct) end
 --- @return number # its argument.
 function vim.api.nvim__id_float(flt) end
 
---- @private
 --- NB: if your UI doesn't use hlstate, this will not return hlstate first time.
 --- @param grid integer
 --- @param row integer
@@ -96,12 +86,10 @@ function vim.api.nvim__id_float(flt) end
 --- @return any[]
 function vim.api.nvim__inspect_cell(grid, row, col) end
 
---- @private
 --- For testing. The condition in schar_cache_clear_if_full is hard to
 --- reach, so this function can be used to force a cache clear in a test.
 function vim.api.nvim__invalidate_glyph_cache() end
 
---- @private
 --- EXPERIMENTAL: this API will change in the future.
 ---
 --- Get the properties for namespace
@@ -110,7 +98,6 @@ function vim.api.nvim__invalidate_glyph_cache() end
 --- @return vim.api.keyset.ns_opts # Map defining the namespace properties, see |nvim__ns_set()|
 function vim.api.nvim__ns_get(ns_id) end
 
---- @private
 --- EXPERIMENTAL: this API will change in the future.
 ---
 --- Set some properties for namespace
@@ -120,7 +107,6 @@ function vim.api.nvim__ns_get(ns_id) end
 --- - wins: a list of windows to be scoped in
 function vim.api.nvim__ns_set(ns_id, opts) end
 
---- @private
 --- EXPERIMENTAL: this API may change in the future.
 ---
 --- Instruct Nvim to redraw various components.
@@ -148,21 +134,17 @@ function vim.api.nvim__ns_set(ns_id, opts) end
 --- - tabline: Redraw the 'tabline'.
 function vim.api.nvim__redraw(opts) end
 
---- @private
 --- @return any[]
 function vim.api.nvim__runtime_inspect() end
 
---- @private
 --- @param path string
 function vim.api.nvim__screenshot(path) end
 
---- @private
 --- Gets internal stats.
 ---
 --- @return table<string,any> # Map of various internal stats.
 function vim.api.nvim__stats() end
 
---- @private
 --- @param str string
 --- @return any
 function vim.api.nvim__unpack(str) end
@@ -194,7 +176,7 @@ function vim.api.nvim_buf_add_highlight(buffer, ns_id, hl_group, line, col_start
 ---
 --- @see vim.api.nvim_buf_detach
 --- @see `:help api-buffer-updates-lua`
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param send_buffer boolean True if the initial notification should contain the
 --- whole buffer: first notification will be `nvim_buf_lines_event`.
 --- Else the first notification will be `nvim_buf_changedtick_event`.
@@ -203,7 +185,7 @@ function vim.api.nvim_buf_add_highlight(buffer, ns_id, hl_group, line, col_start
 --- - on_lines: Lua callback invoked on change.
 ---   Return a truthy value (not `false` or `nil`) to detach. Args:
 ---   - the string "lines"
----   - buffer handle
+---   - buffer id
 ---   - b:changedtick
 ---   - first line that changed (zero-indexed)
 ---   - last line that was changed
@@ -216,7 +198,7 @@ function vim.api.nvim_buf_add_highlight(buffer, ns_id, hl_group, line, col_start
 ---   change compared to on_lines.
 ---   Return a truthy value (not `false` or `nil`) to detach. Args:
 ---   - the string "bytes"
----   - buffer handle
+---   - buffer id
 ---   - b:changedtick
 ---   - start row of the changed text (zero-indexed)
 ---   - start column of the changed text
@@ -233,15 +215,15 @@ function vim.api.nvim_buf_add_highlight(buffer, ns_id, hl_group, line, col_start
 --- - on_changedtick: Lua callback invoked on changedtick
 ---   increment without text change. Args:
 ---   - the string "changedtick"
----   - buffer handle
+---   - buffer id
 ---   - b:changedtick
 --- - on_detach: Lua callback invoked on detach. Args:
 ---   - the string "detach"
----   - buffer handle
+---   - buffer id
 --- - on_reload: Lua callback invoked on reload. The entire buffer
 ---              content should be considered changed. Args:
 ---   - the string "reload"
----   - buffer handle
+---   - buffer id
 --- - utf_sizes: include UTF-32 and UTF-16 size of the replaced
 ---   region, as args to `on_lines`.
 --- - preview: also attach to command preview (i.e. 'inccommand')
@@ -262,7 +244,7 @@ function vim.api.nvim_buf_attach(buffer, send_buffer, opts) end
 --- This is useful e.g. to call Vimscript functions that only work with the
 --- current buffer/window currently, like `jobstart(…, {'term': v:true})`.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param fun function Function to call inside the buffer (currently Lua callable
 --- only)
 --- @return any # Return value of function.
@@ -281,7 +263,7 @@ function vim.api.nvim_buf_clear_highlight(buffer, ns_id, line_start, line_end) e
 --- Lines are 0-indexed. `api-indexing`  To clear the namespace in the entire
 --- buffer, specify line_start=0 and line_end=-1.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param ns_id integer Namespace to clear, or -1 to clear all namespaces.
 --- @param line_start integer Start of range of lines to clear
 --- @param line_end integer End of range of lines to clear (exclusive) or -1 to clear
@@ -291,7 +273,7 @@ function vim.api.nvim_buf_clear_namespace(buffer, ns_id, line_start, line_end) e
 --- Creates a buffer-local command `user-commands`.
 ---
 --- @see vim.api.nvim_create_user_command
---- @param buffer integer Buffer handle, or 0 for current buffer.
+--- @param buffer integer Buffer id, or 0 for current buffer.
 --- @param name string
 --- @param command any
 --- @param opts vim.api.keyset.user_command
@@ -299,7 +281,7 @@ function vim.api.nvim_buf_create_user_command(buffer, name, command, opts) end
 
 --- Removes an `extmark`.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param ns_id integer Namespace id from `nvim_create_namespace()`
 --- @param id integer Extmark id
 --- @return boolean # true if the extmark was found, else false
@@ -309,7 +291,7 @@ function vim.api.nvim_buf_del_extmark(buffer, ns_id, id) end
 ---
 ---
 --- @see vim.api.nvim_del_keymap
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param mode string
 --- @param lhs string
 function vim.api.nvim_buf_del_keymap(buffer, mode, lhs) end
@@ -332,19 +314,19 @@ function vim.api.nvim_buf_del_mark(buffer, name) end
 --- Only commands created with `:command-buffer` or
 --- `nvim_buf_create_user_command()` can be deleted with this function.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer.
+--- @param buffer integer Buffer id, or 0 for current buffer.
 --- @param name string Name of the command to delete.
 function vim.api.nvim_buf_del_user_command(buffer, name) end
 
 --- Removes a buffer-scoped (b:) variable
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param name string Variable name
 function vim.api.nvim_buf_del_var(buffer, name) end
 
 --- Deletes the buffer. See `:bwipeout`
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param opts vim.api.keyset.buf_delete Optional parameters. Keys:
 --- - force:  Force deletion and ignore unsaved changes.
 --- - unload: Unloaded only, do not delete. See `:bunload`
@@ -352,20 +334,20 @@ function vim.api.nvim_buf_delete(buffer, opts) end
 
 --- Gets a changed tick of a buffer
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @return integer # `b:changedtick` value.
 function vim.api.nvim_buf_get_changedtick(buffer) end
 
 --- Gets a map of buffer-local `user-commands`.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param opts vim.api.keyset.get_commands Optional parameters. Currently not used.
 --- @return table<string,any> # Map of maps describing commands.
 function vim.api.nvim_buf_get_commands(buffer, opts) end
 
 --- Gets the position (0-indexed) of an `extmark`.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param ns_id integer Namespace id from `nvim_create_namespace()`
 --- @param id integer Extmark id
 --- @param opts vim.api.keyset.get_extmark Optional parameters. Keys:
@@ -415,7 +397,7 @@ function vim.api.nvim_buf_get_extmark_by_id(buffer, ns_id, id, opts) end
 --- vim.print(ms)
 --- ```
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param ns_id integer Namespace id from `nvim_create_namespace()` or -1 for all namespaces
 --- @param start any Start of range: a 0-indexed (row, col) or valid extmark id
 --- (whose position defines the bound). `api-indexing`
@@ -433,10 +415,10 @@ function vim.api.nvim_buf_get_extmarks(buffer, ns_id, start, end_, opts) end
 
 --- Gets a list of buffer-local `mapping` definitions.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param mode string Mode short-name ("n", "i", "v", ...)
 --- @return vim.api.keyset.get_keymap[] # Array of |maparg()|-like dictionaries describing mappings.
---- The "buffer" key holds the associated buffer handle.
+--- The "buffer" key holds the associated buffer id.
 function vim.api.nvim_buf_get_keymap(buffer, mode) end
 
 --- Gets a line-range from the buffer.
@@ -448,7 +430,9 @@ function vim.api.nvim_buf_get_keymap(buffer, mode) end
 --- Out-of-bounds indices are clamped to the nearest valid value, unless
 --- `strict_indexing` is set.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+---
+--- @see vim.api.nvim_buf_get_text
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param start integer First line index
 --- @param end_ integer Last line index, exclusive
 --- @param strict_indexing boolean Whether out-of-bounds should be an error.
@@ -463,7 +447,7 @@ function vim.api.nvim_buf_get_lines(buffer, start, end_, strict_indexing) end
 ---
 --- @see vim.api.nvim_buf_set_mark
 --- @see vim.api.nvim_buf_del_mark
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param name string Mark name
 --- @return integer[] # (row, col) tuple, (0, 0) if the mark is not set, or is an
 --- uppercase/file mark set in another buffer.
@@ -471,7 +455,7 @@ function vim.api.nvim_buf_get_mark(buffer, name) end
 
 --- Gets the full file name for the buffer
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @return string # Buffer name
 function vim.api.nvim_buf_get_name(buffer) end
 
@@ -490,7 +474,7 @@ function vim.api.nvim_buf_get_number(buffer) end
 --- Unlike `line2byte()`, throws error for out-of-bounds indexing.
 --- Returns -1 for unloaded buffer.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param index integer Line index
 --- @return integer # Integer byte offset, or -1 for unloaded buffer.
 function vim.api.nvim_buf_get_offset(buffer, index) end
@@ -501,17 +485,14 @@ function vim.api.nvim_buf_get_offset(buffer, index) end
 --- @return any
 function vim.api.nvim_buf_get_option(buffer, name) end
 
---- Gets a range from the buffer.
----
---- This differs from `nvim_buf_get_lines()` in that it allows retrieving only
---- portions of a line.
+--- Gets a range from the buffer (may be partial lines, unlike `nvim_buf_get_lines()`).
 ---
 --- Indexing is zero-based. Row indices are end-inclusive, and column indices
 --- are end-exclusive.
 ---
 --- Prefer `nvim_buf_get_lines()` when retrieving entire lines.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param start_row integer First line index
 --- @param start_col integer Starting column (byte offset) on first line
 --- @param end_row integer Last line index, inclusive
@@ -522,7 +503,7 @@ function vim.api.nvim_buf_get_text(buffer, start_row, start_col, end_row, end_co
 
 --- Gets a buffer-scoped (b:) variable.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param name string Variable name
 --- @return any # Variable value
 function vim.api.nvim_buf_get_var(buffer, name) end
@@ -530,7 +511,7 @@ function vim.api.nvim_buf_get_var(buffer, name) end
 --- Checks if a buffer is valid and loaded. See `api-buffer` for more info
 --- about unloaded buffers.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @return boolean # true if the buffer is valid and loaded, false otherwise.
 function vim.api.nvim_buf_is_loaded(buffer) end
 
@@ -541,13 +522,13 @@ function vim.api.nvim_buf_is_loaded(buffer) end
 --- for more info about unloaded buffers.
 ---
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @return boolean # true if the buffer is valid, false otherwise.
 function vim.api.nvim_buf_is_valid(buffer) end
 
 --- Returns the number of lines in the given buffer.
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @return integer # Line count, or 0 for unloaded buffer. |api-buffer|
 function vim.api.nvim_buf_line_count(buffer) end
 
@@ -567,7 +548,7 @@ function vim.api.nvim_buf_line_count(buffer) end
 --- An earlier end position is not an error, but then it behaves like an empty
 --- range (no highlighting).
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param ns_id integer Namespace id from `nvim_create_namespace()`
 --- @param line integer Line where to place the mark, 0-based. `api-indexing`
 --- @param col integer Column where to place the mark, 0-based. `api-indexing`
@@ -648,8 +629,7 @@ function vim.api.nvim_buf_line_count(buffer) end
 ---      otherwise the same as "trunc".
 --- - ephemeral : for use with `nvim_set_decoration_provider()`
 ---     callbacks. The mark will only be used for the current
----     redraw cycle, and not be permantently stored in the
----     buffer.
+---     redraw cycle, and not be permanently stored in the buffer.
 --- - right_gravity : boolean that indicates the direction
 ---     the extmark will be shifted in when new text is inserted
 ---     (true for right, false for left). Defaults to true.
@@ -704,7 +684,7 @@ function vim.api.nvim_buf_set_extmark(buffer, ns_id, line, col, opts) end
 ---
 ---
 --- @see vim.api.nvim_set_keymap
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param mode string
 --- @param lhs string
 --- @param rhs string
@@ -715,7 +695,7 @@ function vim.api.nvim_buf_set_keymap(buffer, mode, lhs, rhs, opts) end
 ---
 --- Indexing is zero-based, end-exclusive. Negative indices are interpreted
 --- as length+1+index: -1 refers to the index past the end. So to change
---- or delete the last element use start=-2 and end=-1.
+--- or delete the last line use start=-2 and end=-1.
 ---
 --- To insert lines at a given index, set `start` and `end` to the same index.
 --- To delete a range of lines, set `replacement` to an empty array.
@@ -725,7 +705,7 @@ function vim.api.nvim_buf_set_keymap(buffer, mode, lhs, rhs, opts) end
 ---
 ---
 --- @see vim.api.nvim_buf_set_text
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param start integer First line index
 --- @param end_ integer Last line index, exclusive
 --- @param strict_indexing boolean Whether out-of-bounds should be an error.
@@ -753,7 +733,7 @@ function vim.api.nvim_buf_set_mark(buffer, name, line, col, opts) end
 
 --- Sets the full file name for a buffer, like `:file_f`
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param name string Buffer name
 function vim.api.nvim_buf_set_name(buffer, name) end
 
@@ -781,7 +761,7 @@ function vim.api.nvim_buf_set_option(buffer, name, value) end
 --- Prefer |nvim_paste()| or |nvim_put()| to insert (instead of replace) text at cursor.
 ---
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param start_row integer First line index
 --- @param start_col integer Starting column (byte offset) on first line
 --- @param end_row integer Last line index, inclusive
@@ -791,7 +771,7 @@ function vim.api.nvim_buf_set_text(buffer, start_row, start_col, end_row, end_co
 
 --- Sets a buffer-scoped (b:) variable
 ---
---- @param buffer integer Buffer handle, or 0 for current buffer
+--- @param buffer integer Buffer id, or 0 for current buffer
 --- @param name string Variable name
 --- @param value any Variable value
 function vim.api.nvim_buf_set_var(buffer, name, value) end
@@ -905,7 +885,7 @@ function vim.api.nvim_command_output(command) end
 --- To get an existing group id, do:
 ---
 --- ```lua
---- local id = vim.api.nvim_create_augroup("MyGroup", {
+--- local id = vim.api.nvim_create_augroup('my.lsp.config', {
 ---     clear = false
 --- })
 --- ```
@@ -924,8 +904,8 @@ function vim.api.nvim_create_augroup(name, opts) end
 --- Example using Lua callback:
 ---
 --- ```lua
---- vim.api.nvim_create_autocmd({"BufEnter", "BufWinEnter"}, {
----   pattern = {"*.c", "*.h"},
+--- vim.api.nvim_create_autocmd({'BufEnter', 'BufWinEnter'}, {
+---   pattern = {'*.c', '*.h'},
 ---   callback = function(ev)
 ---     print(string.format('event fired: %s', vim.inspect(ev)))
 ---   end
@@ -935,8 +915,8 @@ function vim.api.nvim_create_augroup(name, opts) end
 --- Example using an Ex command as the handler:
 ---
 --- ```lua
---- vim.api.nvim_create_autocmd({"BufEnter", "BufWinEnter"}, {
----   pattern = {"*.c", "*.h"},
+--- vim.api.nvim_create_autocmd({'BufEnter', 'BufWinEnter'}, {
+---   pattern = {'*.c', '*.h'},
 ---   command = "echo 'Entering a C or C++ file'",
 --- })
 --- ```
@@ -945,7 +925,7 @@ function vim.api.nvim_create_augroup(name, opts) end
 --- and "~" must be expanded explicitly:
 ---
 --- ```lua
---- pattern = vim.fn.expand("~") .. "/some/path/*.py"
+--- pattern = vim.fn.expand('~') .. '/some/path/*.py'
 --- ```
 ---
 --- @see `:help autocommand`
@@ -959,8 +939,8 @@ function vim.api.nvim_create_augroup(name, opts) end
 --- - desc (string) optional: description (for documentation and troubleshooting).
 --- - callback (function|string) optional: Lua function (or Vimscript function name, if
 --- string) called when the event(s) is triggered. Lua callback can return a truthy
---- value (not `false` or `nil`) to delete the autocommand. Receives one argument,
---- a table with these keys: [event-args]()
+--- value (not `false` or `nil`) to delete the autocommand, and receives one argument, a
+--- table with these keys: [event-args]()
 ---     - id: (number) autocommand id
 ---     - event: (string) name of the triggered event `autocmd-events`
 ---     - group: (number|nil) autocommand group id, if any
@@ -983,7 +963,7 @@ function vim.api.nvim_create_autocmd(event, opts) end
 --- @param listed boolean Sets 'buflisted'
 --- @param scratch boolean Creates a "throwaway" `scratch-buffer` for temporary work
 --- (always 'nomodified'). Also sets 'nomodeline' on the buffer.
---- @return integer # Buffer handle, or 0 on error
+--- @return integer # Buffer id, or 0 on error
 ---
 function vim.api.nvim_create_buf(listed, scratch) end
 
@@ -1242,14 +1222,14 @@ function vim.api.nvim_get_all_options_info() end
 --- ```lua
 --- -- Matches all criteria
 --- autocommands = vim.api.nvim_get_autocmds({
----   group = "MyGroup",
----   event = {"BufEnter", "BufWinEnter"},
----   pattern = {"*.c", "*.h"}
+---   group = 'MyGroup',
+---   event = {'BufEnter', 'BufWinEnter'},
+---   pattern = {'*.c', '*.h'}
 --- })
 ---
 --- -- All commands from one group
 --- autocommands = vim.api.nvim_get_autocmds({
----   group = "MyGroup",
+---   group = 'MyGroup',
 --- })
 --- ```
 ---
@@ -1350,7 +1330,7 @@ function vim.api.nvim_get_context(opts) end
 
 --- Gets the current buffer.
 ---
---- @return integer # Buffer handle
+--- @return integer # Buffer id
 function vim.api.nvim_get_current_buf() end
 
 --- Gets the current line.
@@ -1599,12 +1579,12 @@ function vim.api.nvim_input(keys) end
 --- @param col integer Mouse column-position (zero-based, like redraw events)
 function vim.api.nvim_input_mouse(button, action, modifier, grid, row, col) end
 
---- Gets the current list of buffer handles
+--- Gets the current list of buffers.
 ---
 --- Includes unlisted (unloaded/deleted) buffers, like `:ls!`.
 --- Use `nvim_buf_is_loaded()` to check if a buffer is loaded.
 ---
---- @return integer[] # List of buffer handles
+--- @return integer[] # List of buffer ids
 function vim.api.nvim_list_bufs() end
 
 --- Get information about all open channels.
@@ -1641,7 +1621,7 @@ function vim.api.nvim_list_tabpages() end
 --- - "chan"    |channel-id| of remote UI
 function vim.api.nvim_list_uis() end
 
---- Gets the current list of window handles.
+--- Gets the current list of all `window-ID`s in all tabpages.
 ---
 --- @return integer[] # List of |window-ID|s
 function vim.api.nvim_list_wins() end
@@ -1816,47 +1796,40 @@ function vim.api.nvim_open_term(buffer, opts) end
 ---                   region is hidden by setting `eob` flag of
 ---                  'fillchars' to a space char, and clearing the
 ---                  `hl-EndOfBuffer` region in 'winhighlight'.
---- - border: Style of (optional) window border. This can either be a string
----   or an array. The string values are
----   - "none": No border (default).
----   - "single": A single line box.
----   - "double": A double line box.
----   - "rounded": Like "single", but with rounded corners ("╭" etc.).
----   - "solid": Adds padding by a single whitespace cell.
----   - "shadow": A drop shadow effect by blending with the background.
----   - If it is an array, it should have a length of eight or any divisor of
----     eight. The array will specify the eight chars building up the border
----     in a clockwise fashion starting with the top-left corner. As an
----     example, the double box style could be specified as:
----     ```
----     [ "╔", "═" ,"╗", "║", "╝", "═", "╚", "║" ].
----     ```
----     If the number of chars are less than eight, they will be repeated. Thus
----     an ASCII border could be specified as
----     ```
----     [ "/", "-", \"\\\\\", "|" ],
----     ```
----     or all chars the same as
----     ```
----     [ "x" ].
----     ```
----   An empty string can be used to turn off a specific border, for instance,
+--- - border: (`string|string[]`) (defaults to 'winborder' option) Window border. The string form
+---   accepts the same values as the 'winborder' option. The array form must have a length of
+---   eight or any divisor of eight, specifying the chars that form the border in a clockwise
+---   fashion starting from the top-left corner. For example, the double-box style can be
+---   specified as:
 ---   ```
----     [ "", "", "", ">", "", "", "", "<" ]
+---   [ "╔", "═" ,"╗", "║", "╝", "═", "╚", "║" ].
 ---   ```
----   will only make vertical borders but not horizontal ones.
----   By default, `FloatBorder` highlight is used, which links to `WinSeparator`
----   when not defined.  It could also be specified by character:
+---   If fewer than eight chars are given, they will be repeated. An ASCII border could be
+---   specified as:
 ---   ```
----     [ ["+", "MyCorner"], ["x", "MyBorder"] ].
+---   [ "/", "-", \"\\\\\", "|" ],
 ---   ```
---- - title: Title (optional) in window border, string or list.
+---   Or one char for all sides:
+---   ```
+---   [ "x" ].
+---   ```
+---   Empty string can be used to hide a specific border. This example will show only vertical
+---   borders, not horizontal:
+---   ```
+---   [ "", "", "", ">", "", "", "", "<" ]
+---   ```
+---   By default, `hl-FloatBorder` highlight is used, which links to `hl-WinSeparator` when not
+---   defined.  Each border side can specify an optional highlight:
+---   ```
+---   [ ["+", "MyCorner"], ["x", "MyBorder"] ].
+---   ```
+--- - title: (optional) Title in window border, string or list.
 ---   List should consist of `[text, highlight]` tuples.
 ---   If string, or a tuple lacks a highlight, the default highlight group is `FloatTitle`.
 --- - title_pos: Title position. Must be set with `title` option.
 ---   Value can be one of "left", "center", or "right".
 ---   Default is `"left"`.
---- - footer: Footer (optional) in window border, string or list.
+--- - footer: (optional) Footer in window border, string or list.
 ---   List should consist of `[text, highlight]` tuples.
 ---   If string, or a tuple lacks a highlight, the default highlight group is `FloatFooter`.
 --- - footer_pos: Footer position. Must be set with `footer` option.
@@ -2088,7 +2061,7 @@ function vim.api.nvim_select_popupmenu_item(item, insert, finish, opts) end
 
 --- Sets the current window's buffer to `buffer`.
 ---
---- @param buffer integer Buffer handle
+--- @param buffer integer Buffer id
 function vim.api.nvim_set_current_buf(buffer) end
 
 --- Changes the global working directory.
@@ -2106,7 +2079,7 @@ function vim.api.nvim_set_current_line(line) end
 --- @param tabpage integer `tab-ID` to focus
 function vim.api.nvim_set_current_tabpage(tabpage) end
 
---- Sets the current window. Also changes tabpage, if necessary.
+--- Sets the current window (and tabpage, implicitly).
 ---
 --- @param window integer `window-ID` to focus
 function vim.api.nvim_set_current_win(window) end
@@ -2380,7 +2353,7 @@ function vim.api.nvim_win_del_var(window, name) end
 --- Gets the current buffer in a window
 ---
 --- @param window integer `window-ID`, or 0 for current window
---- @return integer # Buffer handle
+--- @return integer # Buffer id
 function vim.api.nvim_win_get_buf(window) end
 
 --- Gets window configuration.
@@ -2465,7 +2438,7 @@ function vim.api.nvim_win_is_valid(window) end
 --- Sets the current buffer in a window, without side effects
 ---
 --- @param window integer `window-ID`, or 0 for current window
---- @param buffer integer Buffer handle
+--- @param buffer integer Buffer id
 function vim.api.nvim_win_set_buf(window, buffer) end
 
 --- Configures window layout. Cannot be used to move the last window in a

@@ -76,6 +76,7 @@ local new_layout = {
   ['news.txt'] = true,
   ['news-0.9.txt'] = true,
   ['news-0.10.txt'] = true,
+  ['news-0.11.txt'] = true,
   ['nvim.txt'] = true,
   ['provider.txt'] = true,
   ['tui.txt'] = true,
@@ -778,6 +779,7 @@ local function parse_buf(fname, text, parser_path)
     vim.treesitter.language.add('vimdoc', { path = parser_path })
   end
   local lang_tree = assert(vim.treesitter.get_parser(buf, nil, { error = false }))
+  lang_tree:parse()
   return lang_tree, buf
 end
 
@@ -1397,6 +1399,9 @@ function M.validate(help_dir, include, parser_path)
   local files_to_errors = {} ---@type table<string, string[]>
   ensure_runtimepath()
   tagmap = get_helptags(vim.fs.normalize(help_dir))
+  --- XXX: Append tags from netrw, until we remove it...
+  local netrwtags = get_helptags(vim.fs.normalize('$VIMRUNTIME/pack/dist/opt/netrw/doc/'))
+  tagmap = vim.tbl_extend('keep', tagmap, netrwtags)
   helpfiles = get_helpfiles(help_dir, include)
   parser_path = parser_path and vim.fs.normalize(parser_path) or nil
 
@@ -1424,7 +1429,7 @@ function M.validate(help_dir, include, parser_path)
   }
 end
 
---- Validates vimdoc files on $VIMRUNTIME. and print human-readable error messages if fails.
+--- Validates vimdoc files in $VIMRUNTIME, and prints error messages on failure.
 ---
 --- If this fails, try these steps (in order):
 --- 1. Fix/cleanup the :help docs.
@@ -1464,7 +1469,7 @@ function M.test_gen(help_dir)
   print('doc path = ' .. vim.uv.fs_realpath(help_dir))
 
   -- Because gen() is slow (~30s), this test is limited to a few files.
-  local input = { 'help.txt', 'index.txt', 'nvim.txt' }
+  local input = { 'api.txt', 'index.txt', 'nvim.txt' }
   local rv = M.gen(help_dir, tmpdir, input)
   eq(#input, #rv.helpfiles)
   eq(0, rv.err_count, 'parse errors in :help docs')

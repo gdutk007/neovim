@@ -853,6 +853,39 @@ describe('API', function()
         feed('u') -- Undo.
         expect(expected1)
       end)
+      it("stream: multiple chunks sets correct '[ mark", function()
+        -- Pastes single chunk
+        api.nvim_paste('aaaaaa\n', true, -1)
+        eq({ 0, 1, 1, 0 }, fn.getpos("'["))
+        -- Pastes an empty chunk
+        api.nvim_paste('', true, -1)
+        eq({ 0, 2, 1, 0 }, fn.getpos("'["))
+        -- Pastes some chunks on empty line
+        api.nvim_paste('1/chunk 1 (start)\n', true, 1)
+        eq({ 0, 2, 1, 0 }, fn.getpos("'["))
+        api.nvim_paste('1/chunk 2\n', true, 2)
+        eq({ 0, 2, 1, 0 }, fn.getpos("'["))
+        api.nvim_paste('1/chunk 3 (end)\n', true, 3)
+        eq({ 0, 2, 1, 0 }, fn.getpos("'["))
+        -- Pastes some chunks on non-empty line
+        api.nvim_paste('aaaaaa', true, -1)
+        eq({ 0, 5, 1, 0 }, fn.getpos("'["))
+        api.nvim_paste('bbbbbb', true, 1)
+        eq({ 0, 5, 7, 0 }, fn.getpos("'["))
+        api.nvim_paste('cccccc', true, 2)
+        eq({ 0, 5, 7, 0 }, fn.getpos("'["))
+        api.nvim_paste('dddddd\n', true, 3)
+        eq({ 0, 5, 7, 0 }, fn.getpos("'["))
+        -- Pastes some empty chunks between non-empty chunks
+        api.nvim_paste('', true, 1)
+        eq({ 0, 5, 7, 0 }, fn.getpos("'["))
+        api.nvim_paste('a', true, 2)
+        eq({ 0, 6, 1, 0 }, fn.getpos("'["))
+        api.nvim_paste('', true, 2)
+        eq({ 0, 6, 1, 0 }, fn.getpos("'["))
+        api.nvim_paste('a', true, 3)
+        eq({ 0, 6, 1, 0 }, fn.getpos("'["))
+      end)
       it('stream: Insert mode', function()
         -- If nvim_paste() calls :undojoin without making any changes, this makes it an error.
         feed('afoo<Esc>u')
@@ -3167,14 +3200,23 @@ describe('API', function()
 
   describe('nvim_create_namespace', function()
     it('works', function()
-      eq({}, api.nvim_get_namespaces())
-      eq(1, api.nvim_create_namespace('ns-1'))
-      eq(2, api.nvim_create_namespace('ns-2'))
-      eq(1, api.nvim_create_namespace('ns-1'))
-      eq({ ['ns-1'] = 1, ['ns-2'] = 2 }, api.nvim_get_namespaces())
-      eq(3, api.nvim_create_namespace(''))
-      eq(4, api.nvim_create_namespace(''))
-      eq({ ['ns-1'] = 1, ['ns-2'] = 2 }, api.nvim_get_namespaces())
+      local orig = api.nvim_get_namespaces()
+      local base = vim.iter(orig):fold(0, function(acc, _, v)
+        return math.max(acc, v)
+      end)
+      eq(base + 1, api.nvim_create_namespace('ns-1'))
+      eq(base + 2, api.nvim_create_namespace('ns-2'))
+      eq(base + 1, api.nvim_create_namespace('ns-1'))
+
+      local expected = vim.tbl_extend('error', orig, {
+        ['ns-1'] = base + 1,
+        ['ns-2'] = base + 2,
+      })
+
+      eq(expected, api.nvim_get_namespaces())
+      eq(base + 3, api.nvim_create_namespace(''))
+      eq(base + 4, api.nvim_create_namespace(''))
+      eq(expected, api.nvim_get_namespaces())
     end)
   end)
 

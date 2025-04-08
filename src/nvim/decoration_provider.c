@@ -23,8 +23,6 @@
 # include "decoration_provider.c.generated.h"
 #endif
 
-enum { DP_MAX_ERROR = 3, };
-
 static kvec_t(DecorProvider) decor_providers = KV_INITIAL_VALUE;
 
 #define DECORATION_PROVIDER_INIT(ns_id) (DecorProvider) \
@@ -34,9 +32,9 @@ static kvec_t(DecorProvider) decor_providers = KV_INITIAL_VALUE;
 
 static void decor_provider_error(DecorProvider *provider, const char *name, const char *msg)
 {
-  const char *ns_name = describe_ns(provider->ns_id, "(UNKNOWN PLUGIN)");
-  ILOG("error in provider %s.%s: %s", ns_name, name, msg);
-  msg_schedule_semsg_multiline("Error in decoration provider %s.%s:\n%s", ns_name, name, msg);
+  const char *ns = describe_ns(provider->ns_id, "(UNKNOWN PLUGIN)");
+  ELOG("Error in decoration provider \"%s\" (ns=%s):\n%s", name, ns, msg);
+  msg_schedule_semsg_multiline("Error in decoration provider \"%s\" (ns=%s):\n%s", name, ns, msg);
 }
 
 // Note we pass in a provider index as this function may cause decor_providers providers to be
@@ -59,11 +57,11 @@ static bool decor_provider_invoke(int provider_idx, const char *name, LuaRef ref
     return true;
   }
 
-  if (ERROR_SET(&err) && provider->error_count < DP_MAX_ERROR) {
+  if (ERROR_SET(&err) && provider->error_count < CB_MAX_ERROR) {
     decor_provider_error(provider, name, err.msg);
     provider->error_count++;
 
-    if (provider->error_count >= DP_MAX_ERROR) {
+    if (provider->error_count >= CB_MAX_ERROR) {
       provider->state = kDecorProviderDisabled;
     }
   }
@@ -120,6 +118,8 @@ void decor_providers_start(void)
       ADD_C(args, INTEGER_OBJ((int)display_tick));
       bool active = decor_provider_invoke((int)i, "start", p->redraw_start, args, true);
       kv_A(decor_providers, i).state = active ? kDecorProviderActive : kDecorProviderRedrawDisabled;
+    } else if (p->state != kDecorProviderDisabled) {
+      kv_A(decor_providers, i).state = kDecorProviderActive;
     }
   }
 }
@@ -222,7 +222,6 @@ void decor_providers_invoke_end(void)
       MAXSIZE_TEMP_ARRAY(args, 1);
       ADD_C(args, INTEGER_OBJ((int)display_tick));
       decor_provider_invoke((int)i, "end", p->redraw_end, args, true);
-      kv_A(decor_providers, i).state = kDecorProviderActive;
     }
   }
   decor_check_to_be_deleted();

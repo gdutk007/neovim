@@ -208,8 +208,9 @@ static void changed_lines_invalidate_win(win_T *wp, linenr_T lnum, colnr_T col, 
           wp->w_lines[i].wl_foldend += xtra;
           wp->w_lines[i].wl_lastlnum += xtra;
         }
-      } else if (wp->w_lines[i].wl_foldend >= lnum) {
-        // change somewhere inside this range of folded lines,
+      } else if (wp->w_lines[i].wl_foldend >= lnum
+                 || wp->w_lines[i].wl_lastlnum >= lnum) {
+        // change somewhere inside this range of folded or concealed lines,
         // may need to be redrawn
         wp->w_lines[i].wl_valid = false;
       }
@@ -239,6 +240,7 @@ static void changed_common(buf_T *buf, linenr_T lnum, colnr_T col, linenr_T lnum
   FOR_ALL_WINDOWS_IN_TAB(win, curtab) {
     if (win->w_buffer == buf && win->w_p_diff && diff_internal()) {
       curtab->tp_diff_update = true;
+      diff_update_line(lnum);
     }
   }
 
@@ -797,7 +799,7 @@ void ins_char_bytes(char *buf, size_t charlen)
 
   if (!p_ri || (State & REPLACE_FLAG)) {
     // Normal insert: move cursor right
-    curwin->w_cursor.col += (int)charlen;
+    curwin->w_cursor.col += (colnr_T)charlen;
   }
   // TODO(Bram): should try to update w_row here, to avoid recomputing it later.
 }
@@ -827,7 +829,7 @@ void ins_str(char *s, size_t slen)
   memmove(newp + col + slen, oldp + col, (size_t)bytes);
   ml_replace(lnum, newp, false);
   inserted_bytes(lnum, col, 0, (int)slen);
-  curwin->w_cursor.col += (int)slen;
+  curwin->w_cursor.col += (colnr_T)slen;
 }
 
 // Delete one character under the cursor.
@@ -1819,7 +1821,7 @@ bool open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
       saved_line[curwin->w_cursor.col] = NUL;
       // Remove trailing white space, unless OPENLINE_KEEPTRAIL used.
       if (trunc_line && !(flags & OPENLINE_KEEPTRAIL)) {
-        truncate_spaces(saved_line);
+        truncate_spaces(saved_line, (size_t)curwin->w_cursor.col);
       }
       ml_replace(curwin->w_cursor.lnum, saved_line, false);
 

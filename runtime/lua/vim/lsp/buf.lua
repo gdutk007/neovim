@@ -1152,10 +1152,11 @@ local function on_code_action_results(results, opts)
       return
     end
 
-    if not action.edit or not action.command and client:supports_method(ms.codeAction_resolve) then
+    if not (action.edit and action.command) and client:supports_method(ms.codeAction_resolve) then
       client:request(ms.codeAction_resolve, action, function(err, resolved_action)
         if err then
-          if action.command then
+          -- If resolve fails, try to apply the edit/command from the original code action.
+          if action.edit or action.command then
             apply_action(action, client, choice.ctx)
           else
             vim.notify(err.code .. ': ' .. err.message, vim.log.levels.ERROR)
